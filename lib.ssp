@@ -1117,9 +1117,10 @@ fn wrap_line(line: Str, width: Int, break_long: Bool) -> List[Str]
 // `s` word-wrapped into lines of at most `width` display columns (see `display_width`). Each line
 // of the input is wrapped on its own, so existing line breaks and blank lines stay; runs of
 // whitespace between words become one space. With `break_long`, a word wider than `width` is
-// cut into pieces; without it, it stands alone on a longer line.
+// cut into pieces (a single character wider than `width`, such as a CJK character at width 1,
+// still gets a line of its own); without it, it stands alone on a longer line.
 pub fn wrap_lines(s: Str, width: Int where _ >= 1, break_long: Bool) -> List[Str]
-  post not break_long or r.all(l => display_width(l) <= width)
+  post not break_long or r.all(l => display_width(l) <= width or grapheme_count(l) == 1)
 = lines(s).flat_map(l => wrap_line(l, width, break_long))
 
 // `s` wrapped to `width` columns with `\n` between lines, not breaking long words (WordUtils
@@ -1335,7 +1336,7 @@ fn json_step(st0: JsonSt, c: Str) -> JsonSt
   if st.mode == 5 then emit_unit(st, st.hex * 16 + d) else st with hex := st.hex * 16 + d, mode := st.mode + 1
 
 // The text of a JSON string's inside with its escapes decoded (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`,
-// `\r`, `\t` and `\uXXXX`, with surrogate pairs combined); `none` for an unknown escape, a
+// `\r`, `\t` and `\uHHHH` (four hex digits), with surrogate pairs combined); `none` for an unknown escape, a
 // truncated one or an unpaired surrogate. Unescaped quotes and control characters are accepted.
 pub fn unescape_json(s: Str) -> Opt[Str]
 = do
