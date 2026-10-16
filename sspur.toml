@@ -1,0 +1,5 @@
+[package]
+name = "strings"
+version = "0.1.0"
+description = "String utilities in the spirit of Apache Commons StringUtils: case, padding, graphemes, distances, wrapping, slugs, escaping"
+license = "MIT"

@@ -1,0 +1,2019 @@
+// strings: the string utilities SSPUR's builtin `Str` methods leave out, in the spirit of Apache
+// Commons StringUtils, WordUtils and StringEscapeUtils. Every function is total: indexes are
+// clamped, missing separators have a documented result, and nothing traps on any input.
+// Indexes and lengths count code points, as the builtins do, unless a doc says graphemes or
+// display width.
+
+// Options for `slugify_with`: `sep` goes between words, `max_len` caps the length in characters
+// (0 means no limit), and `lowercase` lowercases the result.
+pub type SlugOptions = {sep: Str, max_len: Int where _ >= 0, lowercase: Bool} derive Eq, Show
+
+// ---------- character classes ----------
+
+fn is_ws_code(c: Int) -> Bool
+= c >= 9 and c <= 13 or c == 32 or c == 133 or c == 160 or c == 5760 or c >= 8192 and c <= 8202 or c == 8232 or c == 8233 or c == 8239 or c == 8287 or c == 12288
+
+fn digit_zeros() -> List[Int]
+= [48, 1632, 1776, 1984, 2406, 2534, 2662, 2790, 2918, 3046, 3174, 3302, 3430, 3558, 3664, 3792, 3872, 4160, 4240, 6112, 6160, 6470, 6608, 6784, 6800, 6992, 7088, 7232, 7248, 42528, 43216, 43264, 43472, 43504, 43600, 44016, 65296]
+
+fn digit_value(c: Int) -> Opt[Int]
+= if c >= 48 and c <= 57 then some(c - 48) else if c < 1632 then none else digit_zeros().find(z => c >= z and c <= z + 9).map(z => c - z)
+
+fn code_of(c: Str) -> Int
+= c.codes.first.or(-1)
+
+fn is_ws(c: Str) -> Bool
+= is_ws_code(code_of(c))
+
+fn is_dig(c: Str) -> Bool
+= digit_value(code_of(c)).is_some
+
+fn is_up(c: Str) -> Bool
+= c.lower != c and c.upper == c
+
+fn is_lo(c: Str) -> Bool
+= c.upper != c and c.lower == c
+
+fn is_alnum(c: Str) -> Bool
+= c.is_alpha or is_dig(c)
+
+fn cmp_str(a: Str, b: Str) -> Int
+= if a < b then -1 else if a > b then 1 else 0
+
+fn str_of(codes: List[Int]) -> Str
+= from_codes(codes).or("")
+
+// ---------- empty and blank ----------
+
+// Whether `s` is empty or only whitespace. Whitespace is the Unicode White_Space set: ASCII
+// tab, line feed, vertical tab, form feed, carriage return and space, NEL, NBSP, U+1680,
+// U+2000 to U+200A, the line and paragraph separators, U+202F, U+205F and U+3000.
+pub fn is_blank(s: Str) -> Bool
+= s.codes.all(is_ws_code)
+
+// Whether `s` is non-empty and only whitespace (see `is_blank` for the set); `""` is not.
+pub fn is_whitespace(s: Str) -> Bool
+= not s.is_empty and is_blank(s)
+
+// Whether `s` contains at least one whitespace character.
+pub fn contains_whitespace(s: Str) -> Bool
+= s.codes.any(is_ws_code)
+
+// Whether any string in `xs` is blank; false for an empty list.
+pub fn is_any_blank(xs: List[Str]) -> Bool
+= xs.any(is_blank)
+
+// Whether every string in `xs` is blank; true for an empty list.
+pub fn is_all_blank(xs: List[Str]) -> Bool
+= xs.all(is_blank)
+
+// Whether any string in `xs` is empty; false for an empty list.
+pub fn is_any_empty(xs: List[Str]) -> Bool
+= xs.any(_.is_empty)
+
+// `s`, or `d` when `s` is empty.
+pub fn default_if_empty(s: Str, d: Str) -> Str
+= if s.is_empty then d else s
+
+// `s`, or `d` when `s` is blank.
+pub fn default_if_blank(s: Str, d: Str) -> Str
+= if is_blank(s) then d else s
+
+// The first string in `xs` that is not blank.
+pub fn first_non_blank(xs: List[Str]) -> Opt[Str]
+= xs.find(x => not is_blank(x))
+
+// The first string in `xs` that is not empty.
+pub fn first_non_empty(xs: List[Str]) -> Opt[Str]
+= xs.find(x => not x.is_empty)
+
+// `s` trimmed (builtin `trim`, which strips Unicode whitespace), or `none` when nothing is left.
+pub fn trim_to_none(s: Str) -> Opt[Str]
+= if is_blank(s) then none else some(s.trim)
+
+// `some(s)`, or `none` when `s` is empty.
+pub fn none_if_empty(s: Str) -> Opt[Str]
+= if s.is_empty then none else some(s)
+
+// ---------- predicates ----------
+
+// Whether `s` is non-empty and every character is a Unicode decimal digit (ASCII `0-9`, Arabic-
+// Indic, Devanagari and the other Nd blocks of the BMP, and fullwidth digits). Signs, points
+// and exponents are not digits, so `"-1"` and `"1.5"` are not numeric.
+pub fn is_numeric(s: Str) -> Bool
+= not s.is_empty and s.codes.all(c => digit_value(c).is_some)
+
+// Whether `s` is non-empty and only ASCII digits `0-9`.
+pub fn is_ascii_digits(s: Str) -> Bool
+= not s.is_empty and s.codes.all(c => c >= 48 and c <= 57)
+
+// Whether `s` is non-empty and every character is a letter (builtin `is_alpha`) or a decimal
+// digit (as `is_numeric`).
+pub fn is_alphanumeric(s: Str) -> Bool
+= not s.is_empty and s.chars.all(is_alnum)
+
+// Whether every character of `s` is a letter or the space `" "`; true for `""`, as in Commons.
+pub fn is_alpha_space(s: Str) -> Bool
+= s.chars.all(c => c == " " or c.is_alpha)
+
+// Whether every character of `s` is a letter, a decimal digit or the space `" "`; true for `""`.
+pub fn is_alphanumeric_space(s: Str) -> Bool
+= s.chars.all(c => c == " " or is_alnum(c))
+
+// Whether every character of `s` is ASCII (below U+0080); true for `""`.
+pub fn is_ascii(s: Str) -> Bool
+= s.codes.all(c => c < 128)
+
+// Whether every character of `s` is printable ASCII, U+0020 to U+007E; true for `""`.
+pub fn is_ascii_printable(s: Str) -> Bool
+= s.codes.all(c => c >= 32 and c <= 126)
+
+// Whether `s` is non-empty and every character is an uppercase letter (a character that has a
+// lowercase mapping and is its own uppercase); digits, spaces and uncased letters make it false.
+pub fn is_all_upper(s: Str) -> Bool
+= not s.is_empty and s.chars.all(is_up)
+
+// Whether `s` is non-empty and every character is a lowercase letter; the mirror of `is_all_upper`.
+pub fn is_all_lower(s: Str) -> Bool
+= not s.is_empty and s.chars.all(is_lo)
+
+// Whether `s` contains both an uppercase and a lowercase letter.
+pub fn is_mixed_case(s: Str) -> Bool
+= s.chars.any(is_up) and s.chars.any(is_lo)
+
+// ---------- graphemes and display width ----------
+
+fn extend_ranges() -> List[(Int, Int)]
+= [(768, 879), (1155, 1161), (1425, 1469), (1471, 1471), (1473, 1474), (1476, 1477), (1479, 1479), (1552, 1562), (1611, 1631), (1648, 1648), (1750, 1756), (1759, 1764), (1767, 1768), (1770, 1773), (2304, 2307), (2362, 2364), (2366, 2383), (2385, 2391), (2402, 2403), (2433, 2435), (2492, 2492), (2494, 2509), (2519, 2519), (2530, 2531), (3633, 3633), (3636, 3642), (3655, 3662), (6832, 6911), (7616, 7679), (8204, 8205), (8400, 8447), (12441, 12442), (65024, 65039), (65056, 65071), (127995, 127999), (917536, 917631), (917760, 917999)]
+
+fn is_extend(c: Int) -> Bool
+= c >= 768 and extend_ranges().any(r => c >= r.0 and c <= r.1)
+
+fn is_ri(c: Int) -> Bool
+= c >= 127462 and c <= 127487
+
+fn is_pict(c: Int) -> Bool
+= c >= 126976 and c <= 129791 or c >= 9728 and c <= 10175 or c >= 8960 and c <= 9215 or c == 11088 or c == 11093 or c == 169 or c == 174 or c == 8252 or c == 8265 or c == 8482
+
+fn jamo_joins(p: Int, c: Int) -> Bool
+= do
+  l = p >= 4352 and p <= 4447
+  v = p >= 4448 and p <= 4519
+  t = p >= 4520 and p <= 4607
+  syl = p >= 44032 and p <= 55203
+  cv = c >= 4448 and c <= 4519
+  ct = c >= 4520 and c <= 4607
+  l and (c >= 4352 and c <= 4447 or cv or c >= 44032 and c <= 55203) or (v or syl) and (cv or ct) or t and ct
+
+fn gb_step(st: (Int, Int, Bool), c: Int) -> (Int, Int, Bool)
+= do
+  (prev, ri, _) = st
+  joins = if prev < 0 then false else if prev == 13 and c == 10 then true else if prev == 13 or prev == 10 or c == 13 or c == 10 then false else if is_extend(c) then true else if prev == 8205 and is_pict(c) then true else if is_ri(c) and is_ri(prev) and ri % 2 == 1 then true else jamo_joins(prev, c)
+  ri2 = if is_ri(c) then (if joins then ri + 1 else 1) else if joins then ri else 0
+  (c, ri2, not joins)
+
+fn cluster_codes(s: Str) -> List[List[Int]]
+= do
+  cs = s.codes
+  st = cs.scan((-1, 0, false), gb_step)
+  starts = (0..cs.len).filter(i => st[i].2)
+  starts.zip(starts.drop(1).push(cs.len)).map(p => cs.slice(p.0, p.1))
+
+// The grapheme clusters of `s`, an approximation of Unicode extended grapheme clusters (UAX 29):
+// a cluster is a base character followed by combining marks (U+0300 to U+036F and the other
+// common mark blocks, Hebrew, Arabic, Devanagari, Bengali and Thai marks, kana voicing marks),
+// variation selectors, emoji modifiers, tags and ZWJ; ZWJ joins two pictographs; regional
+// indicators pair into flags; CR LF is one cluster; Hangul jamo join into syllables. Prepend
+// characters and the full Indic conjunct rules are not modelled.
+pub fn graphemes(s: Str) -> List[Str]
+  post r.join("") == s
+= cluster_codes(s).map(str_of)
+
+// The number of grapheme clusters in `s` (see `graphemes`).
+pub fn grapheme_count(s: Str) -> Int
+  post r >= 0 and r <= s.len
+= cluster_codes(s).len
+
+// `s` with its grapheme clusters in reverse order, so accents stay on their letters and flags and
+// emoji sequences stay whole (builtin `reverse` reverses code points).
+pub fn reverse_graphemes(s: Str) -> Str
+= cluster_codes(s).reverse.map(str_of).join("")
+
+// The first `n` grapheme clusters of `s`; all of `s` when it has fewer, `""` when `n <= 0`.
+pub fn take_graphemes(s: Str, n: Int) -> Str
+= if n <= 0 then "" else cluster_codes(s).take(n).map(str_of).join("")
+
+// `s` without its first `n` grapheme clusters; `s` when `n <= 0`.
+pub fn drop_graphemes(s: Str, n: Int) -> Str
+= if n <= 0 then s else cluster_codes(s).drop(n).map(str_of).join("")
+
+fn is_wide(c: Int) -> Bool
+= c >= 4352 and c <= 4447 or c >= 11904 and c <= 12350 or c >= 12353 and c <= 13311 or c >= 13312 and c <= 19903 or c >= 19968 and c <= 40959 or c >= 40960 and c <= 42191 or c >= 44032 and c <= 55203 or c >= 63744 and c <= 64255 or c >= 65072 and c <= 65103 or c >= 65280 and c <= 65376 or c >= 65504 and c <= 65510 or c >= 127744 and c <= 128591 or c >= 128640 and c <= 128767 or c >= 129280 and c <= 129791 or c >= 131072 and c <= 262141
+
+fn is_zero_width(c: Int) -> Bool
+= c < 32 or c >= 127 and c < 160 or c == 173 or c >= 8203 and c <= 8207 or c >= 8232 and c <= 8238 or c >= 8288 and c <= 8292 or c == 65279 or is_extend(c)
+
+fn cluster_width(cl: List[Int]) -> Int
+= match cl
+| [] => 0
+| [c, ..rest] => if is_ri(c) then 2 else if is_pict(c) and (c >= 126976 or rest.contains(65039)) then 2 else if rest.contains(65039) then 2 else if is_zero_width(c) then 0 else if is_wide(c) then 2 else 1
+
+// The width of `s` in terminal columns, per grapheme cluster: 0 for control characters,
+// zero-width characters and lone combining marks; 2 for East Asian wide and fullwidth
+// characters (Hangul, CJK, kana, fullwidth forms), emoji and flags; 1 for everything else. A
+// cluster takes the width of its base character. Ambiguous-width characters count 1.
+pub fn display_width(s: Str) -> Int
+  post r >= 0
+= cluster_codes(s).map(cluster_width).sum
+
+// ---------- padding, abbreviation and repetition ----------
+
+fn split_at(cs: List[Str], starts: List[Int]) -> List[Str]
+= starts.zip(starts.drop(1).push(cs.len)).map(p => cs.slice(p.0, p.1).join(""))
+
+fn runs_by(cs: List[Str], keys: List[Int]) -> List[Str]
+= split_at(cs, (0..cs.len).filter(i => i == 0 or keys[i] != keys[i - 1]))
+
+fn fill_cols(n: Int, fill: Str) -> Str
+= do
+  gs = cluster_codes(fill).filter(g => cluster_width(g) > 0)
+  if gs.is_empty or n <= 0 then return " ".repeat(max(n, 0))
+  unit = gs.map(cluster_width).sum
+  whole = gs.map(str_of).join("").repeat(n / unit)
+  left = n % unit
+  ws = gs.map(cluster_width).scan(0, (a, w) => a + w)
+  k = ws.filter(w => w <= left).len
+  tail = gs.take(k).map(str_of).join("")
+  whole + tail + " ".repeat(left - ws.take(k).last.or(0))
+
+// `s` padded on the left with `fill` to `width` display columns (see `display_width`), so CJK
+// and emoji line up in a terminal. `fill` repeats; a fill character too wide for the last
+// column is replaced by a space, and an empty or zero-width `fill` pads with spaces. `s` is
+// returned unchanged when it is already at least `width` columns wide.
+pub fn pad_left_width(s: Str, width: Int, fill: Str) -> Str
+  post display_width(r) >= width
+= s.pad_display(width, fill, 0)
+
+// `s` padded on the right with `fill` to `width` display columns; see `pad_left_width`.
+pub fn pad_right_width(s: Str, width: Int, fill: Str) -> Str
+  post display_width(r) >= width
+= s.pad_display(width, fill, 2)
+
+// `s` centred in `width` display columns with `fill` on both sides; an odd remainder goes on the
+// right, as in Commons `center`. See `pad_left_width` for how `fill` is used.
+pub fn center(s: Str, width: Int, fill: Str) -> Str
+  post display_width(r) >= width
+= s.pad_display(width, fill, 1)
+
+fn pad_display(s: Str, width: Int, fill: Str, mode: Int) -> Str
+= do
+  pad = width - display_width(s)
+  if pad <= 0 then return s
+  l = if mode == 0 then pad else if mode == 2 then 0 else pad / 2
+  fill_cols(l, fill) + s + fill_cols(pad - l, fill)
+
+// `s` cut to at most `width` grapheme clusters, ending in `"..."` when it was cut: `abbreviate(
+// "abcdefg", 6)` is `"abc..."`. When `width` is too small for the marker the result is the first
+// `width` clusters without one.
+pub fn abbreviate(s: Str, width: Int where _ >= 0) -> Str
+  post grapheme_count(r) <= width
+= abbreviate_with(s, width, "...")
+
+// `s` cut to at most `width` grapheme clusters, the last ones being `marker` when it was cut; when
+// `width` is not longer than `marker`, the first `width` clusters of `s` without a marker.
+pub fn abbreviate_with(s: Str, width: Int where _ >= 0, marker: Str) -> Str
+  post grapheme_count(r) <= width
+= do
+  gs = cluster_codes(s)
+  m = grapheme_count(marker)
+  if gs.len <= width then s else if width <= m then gs.take(width).map(str_of).join("") else gs.take(width - m).map(str_of).join("") + marker
+
+// `s` cut to at most `width` grapheme clusters by replacing its middle with `marker`, keeping one
+// more cluster at the front than at the back when the split is uneven: `abbreviate_middle(
+// "abcdef", 4, ".")` is `"ab.f"`. When `width` is not longer than `marker`, the first `width` clusters.
+pub fn abbreviate_middle(s: Str, width: Int where _ >= 0, marker: Str) -> Str
+  post grapheme_count(r) <= width
+= do
+  gs = cluster_codes(s)
+  m = grapheme_count(marker)
+  keep = width - m
+  if gs.len <= width then s else if keep <= 0 then gs.take(width).map(str_of).join("") else gs.take((keep + 1) / 2).map(str_of).join("") + marker + gs.drop(gs.len - keep / 2).map(str_of).join("")
+
+// `s` cut at a word boundary to at most `width` characters including `marker`, which is added when
+// it was cut: the cut falls at the last whitespace that fits, or inside the first word when no
+// whitespace does (as WordUtils `abbreviate`). Trailing whitespace before the marker is dropped.
+pub fn abbreviate_words(s: Str, width: Int where _ >= 0, marker: Str) -> Str
+  post r.len <= width
+= do
+  if s.len <= width then return s
+  room = width - marker.len
+  if room <= 0 then return s.take(width)
+  cs = s.chars
+  var cut = -1
+  for i in 0..room + 1
+    if i < cs.len and is_ws(cs[i]) then cut := i
+  head = if cut > 0 then s.take(cut) else s.take(room)
+  strip_end_chars(head, " \t\n\r") + marker
+
+// The longest prefix of `s` whose UTF-8 encoding fits in `limit` bytes, never splitting a
+// character (a grapheme cluster may be split).
+pub fn truncate_bytes(s: Str, limit: Int where _ >= 0) -> Str
+  post r.byte_len <= limit and s.starts_with(r)
+= do
+  cs = s.chars
+  k = cs.map(_.byte_len).scan(0, (a, n) => a + n).filter(t => t <= limit).len
+  cs.take(k).join("")
+
+// `s` repeated `n` times with `sep` between the copies; `""` when `n` is 0.
+pub fn repeat_sep(s: Str, sep: Str, n: Int where _ >= 0) -> Str
+  post n != 1 or r == s
+= (0..n).map(i => s).join(sep)
+
+// `s` with every character but the first `keep_start` and the last `keep_end` replaced by
+// `mask_char`: `mask("4111111111111111", 0, 4, "*")` is `"************1111"`. When the kept parts
+// would cover the whole string every character is masked, so nothing is revealed by accident.
+pub fn mask(s: Str, keep_start: Int where _ >= 0, keep_end: Int where _ >= 0, mask_char: Str) -> Str
+  post mask_char.len != 1 or r.len == s.len
+= do
+  n = s.len
+  if keep_start + keep_end >= n then return mask_char.repeat(n)
+  s.take(keep_start) + mask_char.repeat(n - keep_start - keep_end) + s.drop(n - keep_end)
+
+// `s` rotated right by `k` characters (left when `k` is negative), as Commons `rotate`:
+// `rotate_chars("abcdefg", 2)` is `"fgabcde"`.
+pub fn rotate_chars(s: Str, k: Int) -> Str
+  post r.len == s.len
+= do
+  n = s.len
+  if n == 0 then return s
+  m = (k % n + n) % n
+  s.drop(n - m) + s.take(n - m)
+
+// The parts of `s` between `sep` in reverse order: `reverse_delimited("a.b.c", ".")` is
+// `"c.b.a"`. An empty `sep` gives `s`.
+pub fn reverse_delimited(s: Str, sep: Str) -> Str
+= if sep.is_empty then s else s.split(sep).reverse.join(sep)
+
+// ---------- case ----------
+
+// The words of `s` for case conversion. Words are runs of letters and decimal digits; every
+// other character separates them. Inside a run a new word starts at a lowercase letter or digit
+// followed by an uppercase letter (`fooBar`, `version2Beta`) and at the last capital of an
+// acronym followed by a lowercase letter (`HTTPServer` is `HTTP`, `Server`). Digits stay with
+// the letters before them (`utf8`, `x86_64` is `x86`, `64`).
+pub fn case_words(s: Str) -> List[Str]
+= do
+  cs = s.chars
+  n = cs.len
+  al = cs.map(is_alnum)
+  up = cs.map(is_up)
+  lo = cs.map(is_lo)
+  dg = cs.map(is_dig)
+  marked = (0..n).map(i => if not al[i] then " " else if i > 0 and al[i - 1] and ((lo[i - 1] or dg[i - 1]) and up[i] or up[i - 1] and up[i] and i + 1 < n and lo[i + 1]) then " " + cs[i] else cs[i])
+  marked.join("").split(" ").filter(w => not w.is_empty)
+
+fn cap_word(w: Str) -> Str
+= w.take(1).upper + w.drop(1).lower
+
+// `s` in camelCase: `to_camel("Hello world_HTTP")` is `"helloWorldHttp"`. Words come from
+// `case_words`; acronyms are not kept in capitals.
+pub fn to_camel(s: Str) -> Str
+= match case_words(s)
+| [] => ""
+| [w, ..rest] => w.lower + rest.map(cap_word).join("")
+
+// `s` in PascalCase: `"HttpServer"` for `"HTTP server"`.
+pub fn to_pascal(s: Str) -> Str
+= case_words(s).map(cap_word).join("")
+
+// `s` in snake_case: `"http_server"` for `"HTTPServer"`.
+pub fn to_snake(s: Str) -> Str
+= case_words(s).map(_.lower).join("_")
+
+// `s` in SCREAMING_SNAKE_CASE, the constant style: `"HTTP_SERVER"`.
+pub fn to_screaming_snake(s: Str) -> Str
+= case_words(s).map(_.upper).join("_")
+
+// `s` in kebab-case: `"http-server"`.
+pub fn to_kebab(s: Str) -> Str
+= case_words(s).map(_.lower).join("-")
+
+// `s` in Train-Case: `"Http-Server"`.
+pub fn to_train(s: Str) -> Str
+= case_words(s).map(cap_word).join("-")
+
+// `s` in dot.case: `"http.server"`.
+pub fn to_dot(s: Str) -> Str
+= case_words(s).map(_.lower).join(".")
+
+// The words of `s` as a title, each capitalized and the rest lowercased, joined by spaces:
+// `to_title("the_quick-brownFox")` is `"The Quick Brown Fox"`. Small words are capitalized too.
+pub fn to_title(s: Str) -> Str
+= case_words(s).map(cap_word).join(" ")
+
+// The words of `s` as a sentence: lowercase, joined by spaces, the first letter capitalized:
+// `to_sentence("helloWorld")` is `"Hello world"`.
+pub fn to_sentence(s: Str) -> Str
+= capitalize(case_words(s).map(_.lower).join(" "))
+
+// `s` with its first character uppercased (by its full mapping, so `ß` becomes `SS`).
+pub fn capitalize(s: Str) -> Str
+= s.take(1).upper + s.drop(1)
+
+// `s` with its first character lowercased.
+pub fn uncapitalize(s: Str) -> Str
+= s.take(1).lower + s.drop(1)
+
+// `s` with uppercase letters lowercased and lowercase letters uppercased; other characters stay.
+pub fn swap_case(s: Str) -> Str
+= s.chars.map(c => if is_up(c) then c.lower else if is_lo(c) then c.upper else c).join("")
+
+// `s` with the first letter of every whitespace-separated word capitalized and the rest left as
+// they are, keeping the whitespace (WordUtils `capitalize`).
+pub fn capitalize_words(s: Str) -> Str
+= s.map_words(capitalize)
+
+// `s` with every whitespace-separated word capitalized and the rest of it lowercased (WordUtils
+// `capitalizeFully`): `"hELLO wORLD"` is `"Hello World"`.
+pub fn capitalize_fully(s: Str) -> Str
+= s.map_words(w => capitalize(w.lower))
+
+fn map_words(s: Str, f: Str -> Str) -> Str
+= runs_by(s.chars, s.chars.map(c => if is_ws(c) then 1 else 0)).map(w => if is_ws(w.take(1)) then w else f(w)).join("")
+
+// The first character of every whitespace-separated word of `s`: `initials("Ada  King lovelace")`
+// is `"AKl"`.
+pub fn initials(s: Str) -> Str
+= s.split_ws.map(_.take(1)).join("")
+
+fn split_ws(s: Str) -> List[Str]
+= s.chars.map(c => if is_ws(c) then " " else c).join("").split(" ").filter(w => not w.is_empty)
+
+// ---------- splitting and joining ----------
+
+// The tokens of `s` between any of the characters in `seps`, with empty tokens dropped (Commons
+// `split(str, chars)`): `split_any("a,b;;c", ",;")` is `["a", "b", "c"]`. An empty `seps` splits
+// on whitespace.
+pub fn split_any(s: Str, seps: Str) -> List[Str]
+= split_any_keep(s, seps).filter(t => not t.is_empty)
+
+// The parts of `s` between any of the characters in `seps`, keeping empty parts, so the result
+// has one more part than there are separators: `split_any_keep("a,,b", ",")` is `["a", "", "b"]`
+// and `""` gives `[""]`, like the builtin `split`. An empty `seps` splits on whitespace.
+pub fn split_any_keep(s: Str, seps: Str) -> List[Str]
+  post r.len >= 1
+= do
+  cs = s.chars
+  idx = (0..cs.len).filter(i => in_set(cs[i], seps))
+  [-1].concat(idx).zip(idx.push(cs.len)).map(p => cs.slice(p.0 + 1, p.1).join(""))
+
+// The parts of `s` split at `sep`, each trimmed, with empty parts dropped: `split_trim(" a , b,,",
+// ",")` is `["a", "b"]`. An empty `sep` gives `[s.trim]`, or `[]` when `s` is blank.
+pub fn split_trim(s: Str, sep: Str) -> List[Str]
+= if sep.is_empty then (if is_blank(s) then [] else [s.trim]) else s.split(sep).map(_.trim).filter(t => not t.is_empty)
+
+// `s` split at the first `n - 1` occurrences of `sep`, so there are at most `n` parts and the last
+// one holds the rest: `split_n("a=b=c", "=", 2)` is `["a", "b=c"]`. An empty `sep` gives `[s]`.
+pub fn split_n(s: Str, sep: Str, n: Int where _ >= 1) -> List[Str]
+  post r.len <= n and r.len >= 1
+= do
+  if sep.is_empty then return [s]
+  parts = s.split(sep)
+  if parts.len <= n then parts else parts.take(n - 1).push(parts.drop(n - 1).join(sep))
+
+// `s` split at the last occurrence of `sep` into what comes before and after it; `none` when
+// `sep` does not occur or is empty. The mirror of the builtin `split_once`.
+pub fn split_last(s: Str, sep: Str) -> Opt[(Str, Str)]
+= match last_index_of(s, sep)
+| some(i) if not sep.is_empty => some((s.take(i), s.drop(i + sep.len)))
+| _ => none
+
+fn char_type(c: Str) -> Int
+= if is_up(c) then 1 else if is_lo(c) then 2 else if is_dig(c) then 3 else if is_ws(c) then 4 else if c.is_alpha then 5 else 6
+
+fn split_types(s: Str, camel: Bool) -> List[Str]
+= do
+  cs = s.chars
+  n = cs.len
+  ts = cs.map(char_type)
+  starts = (0..n).filter(i => i == 0 or (if camel and ts[i] == 2 and ts[i - 1] == 1 then false else if camel and ts[i] == 1 and ts[i - 1] == 1 and i + 1 < n and ts[i + 1] == 2 then true else ts[i] != ts[i - 1]))
+  split_at(cs, starts)
+
+// `s` split into runs of one character type: uppercase, lowercase, digits, whitespace, uncased
+// letters and everything else (Commons `splitByCharacterType`): `"fooBar 42"` is `["foo", "B",
+// "ar", " ", "42"]`.
+pub fn split_by_char_type(s: Str) -> List[Str]
+  post r.join("") == s
+= split_types(s, false)
+
+// Like `split_by_char_type`, but an uppercase run followed by lowercase letters gives its last
+// capital to them: `"ASFRules"` is `["ASF", "Rules"]` and `"fooBar"` is `["foo", "Bar"]`.
+pub fn split_by_char_type_camel(s: Str) -> List[Str]
+  post r.join("") == s
+= split_types(s, true)
+
+// The lines of `s`, split at `\n`, `\r\n` and `\r`, without the line endings. A final line ending
+// does not start another line, so `"a\nb\n"` is `["a", "b"]` and `""` is `[]` (Python
+// `splitlines`).
+pub fn lines(s: Str) -> List[Str]
+= do
+  parts = s.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+  if parts.last == some("") then parts.take(parts.len - 1) else parts
+
+// The strings of `xs` that are not empty, joined with `sep`.
+pub fn join_non_empty(xs: List[Str], sep: Str) -> Str
+= xs.filter(x => not x.is_empty).join(sep)
+
+// `s` cut into pieces of `n` characters; the last piece may be shorter, and `""` gives `[]`.
+pub fn chunks_of(s: Str, n: Int where _ >= 1) -> List[Str]
+  post r.join("") == s
+= s.chars.chunks(n).map(_.join(""))
+
+// ---------- prefixes, suffixes and differences ----------
+
+// The longest prefix every string in `xs` starts with; `""` for an empty list.
+pub fn common_prefix(xs: List[Str]) -> Str
+= match xs
+| [] => ""
+| [x, ..rest] => rest.fold(x, (p, y) => p.take(prefix_len(p.chars, y.chars)))
+
+fn prefix_len(a: List[Str], b: List[Str]) -> Int
+= do
+  n = min(a.len, b.len)
+  var k = 0
+  var same = true
+  for i in 0..n
+    if same and a[i] == b[i] then k := k + 1 else same := false
+  k
+
+// The longest suffix every string in `xs` ends with; `""` for an empty list.
+pub fn common_suffix(xs: List[Str]) -> Str
+= common_prefix(xs.map(_.reverse)).reverse
+
+// The index of the first character where `a` and `b` differ (the length of the shorter one when
+// it is a prefix of the other); `none` when they are equal.
+pub fn index_of_difference(a: Str, b: Str) -> Opt[Int]
+= if a == b then none else some(prefix_len(a.chars, b.chars))
+
+// The rest of `b` from the first character where it differs from `a` (Commons `difference`):
+// `difference("abcde", "abxyz")` is `"xyz"`; `""` when they are equal.
+pub fn difference(a: Str, b: Str) -> Str
+= match index_of_difference(a, b)
+| some(i) => b.drop(i)
+| none => ""
+
+// `s` without `prefix` at the start; `s` when it doesn't start with it.
+pub fn remove_prefix(s: Str, prefix: Str) -> Str
+= if s.starts_with(prefix) then s.drop(prefix.len) else s
+
+// `s` without `suffix` at the end; `s` when it doesn't end with it.
+pub fn remove_suffix(s: Str, suffix: Str) -> Str
+= if s.ends_with(suffix) then s.take(s.len - suffix.len) else s
+
+// `s` starting with `prefix`: unchanged when it already does, else `prefix + s`.
+pub fn ensure_prefix(s: Str, prefix: Str) -> Str
+  post r.starts_with(prefix)
+= if s.starts_with(prefix) then s else prefix + s
+
+// `s` ending with `suffix`: unchanged when it already does, else `s + suffix`.
+pub fn ensure_suffix(s: Str, suffix: Str) -> Str
+  post r.ends_with(suffix)
+= if s.ends_with(suffix) then s else s + suffix
+
+// Whether `s` starts with any of `prefixes`.
+pub fn starts_with_any(s: Str, prefixes: List[Str]) -> Bool
+= prefixes.any(p => s.starts_with(p))
+
+// Whether `s` ends with any of `suffixes`.
+pub fn ends_with_any(s: Str, suffixes: List[Str]) -> Bool
+= suffixes.any(p => s.ends_with(p))
+
+// Whether `s` starts with `prefix`, ignoring case by full case folding (`fold_case`, so
+// `"STRASSE"` starts with `"straß"`).
+pub fn starts_with_ci(s: Str, prefix: Str) -> Bool
+= s.fold_case.starts_with(prefix.fold_case)
+
+// Whether `s` ends with `suffix`, ignoring case by full case folding.
+pub fn ends_with_ci(s: Str, suffix: Str) -> Bool
+= s.fold_case.ends_with(suffix.fold_case)
+
+// Whether `s` contains `sub`, ignoring case by full case folding.
+pub fn contains_ci(s: Str, sub: Str) -> Bool
+= s.fold_case.contains(sub.fold_case)
+
+// ---------- safe substrings ----------
+
+// The first `n` characters of `s`; `""` when `n <= 0`, all of `s` when `n` is larger.
+pub fn left(s: Str, n: Int) -> Str
+= if n <= 0 then "" else s.take(n)
+
+// The last `n` characters of `s`; `""` when `n <= 0`, all of `s` when `n` is larger.
+pub fn right(s: Str, n: Int) -> Str
+= if n <= 0 then "" else s.drop(max(s.len - n, 0))
+
+// The `n` characters of `s` from `pos` (a negative `pos` counts as 0); `""` when `n <= 0` or `pos`
+// is past the end.
+pub fn mid(s: Str, pos: Int, n: Int) -> Str
+= if n <= 0 then "" else s.drop(max(pos, 0)).take(n)
+
+fn norm_index(i: Int, n: Int) -> Int
+= if i < 0 then max(n + i, 0) else min(i, n)
+
+// The characters of `s` from `start` up to `end` (exclusive). Negative indexes count from the end
+// (`-1` is the last character), indexes are clamped to the string, and `""` is the result when
+// `start` is not before `end`: `substring("hello", -3, -1)` is `"ll"`.
+pub fn substring(s: Str, start: Int, end: Int) -> Str
+= do
+  n = s.len
+  a = norm_index(start, n)
+  b = norm_index(end, n)
+  if a >= b then "" else s.drop(a).take(b - a)
+
+// The characters of `s` from `start` to the end; a negative `start` counts from the end.
+pub fn substring_from(s: Str, start: Int) -> Str
+= s.drop(norm_index(start, s.len))
+
+// What comes before the first `sep` in `s`; all of `s` when `sep` doesn't occur, `""` when `sep`
+// is empty (Commons `substringBefore`).
+pub fn substring_before(s: Str, sep: Str) -> Str
+= if sep.is_empty then "" else match s.index_of(sep)
+| some(i) => s.take(i)
+| none => s
+
+// What comes after the first `sep` in `s`; `""` when `sep` doesn't occur, all of `s` when `sep` is
+// empty.
+pub fn substring_after(s: Str, sep: Str) -> Str
+= if sep.is_empty then s else match s.index_of(sep)
+| some(i) => s.drop(i + sep.len)
+| none => ""
+
+// What comes before the last `sep` in `s`; all of `s` when `sep` doesn't occur or is empty.
+pub fn substring_before_last(s: Str, sep: Str) -> Str
+= match split_last(s, sep)
+| some((a, _)) => a
+| none => s
+
+// What comes after the last `sep` in `s`; `""` when `sep` doesn't occur or is empty.
+pub fn substring_after_last(s: Str, sep: Str) -> Str
+= match split_last(s, sep)
+| some((_, b)) => b
+| none => ""
+
+// The text between the first `open` and the first `close` after it (Commons
+// `substringBetween`): `between("a[b]c", "[", "]")` is `some("b")`. `none` when either is missing
+// or empty.
+pub fn between(s: Str, open: Str, close: Str) -> Opt[Str]
+= do
+  if open.is_empty or close.is_empty then return none
+  some((_, rest)) = s.split_once(open) else none
+  some((inner, _)) = rest.split_once(close) else none
+  some(inner)
+
+// Every text between an `open` and the next `close`, left to right without overlaps:
+// `between_all("[a][b]", "[", "]")` is `["a", "b"]`; `[]` when `open` or `close` is empty.
+pub fn between_all(s: Str, open: Str, close: Str) -> List[Str]
+= do
+  if open.is_empty or close.is_empty then return []
+  var out = []
+  var rest = s
+  var going = true
+  for k in 0..s.len + 1
+    if going then match next_between(rest, open, close)
+    | some((inner, tail)) => do
+      out := out.push(inner)
+      rest := tail
+    | none => going := false
+  out
+
+fn next_between(s: Str, open: Str, close: Str) -> Opt[(Str, Str)]
+= do
+  some((_, after)) = s.split_once(open) else none
+  after.split_once(close)
+
+// `s` without one line ending at the end (`\r\n`, `\n` or `\r`); `s` when it has none.
+pub fn chomp(s: Str) -> Str
+= if s.ends_with("\r\n") then s.take(s.len - 2) else if s.ends_with("\n") or s.ends_with("\r") then s.take(s.len - 1) else s
+
+// `s` without its last character, or without a final `\r\n` as a whole; `""` stays `""`.
+pub fn chop(s: Str) -> Str
+= if s.ends_with("\r\n") then s.take(s.len - 2) else s.take(max(s.len - 1, 0))
+
+// ---------- character sets ----------
+
+// `s` without the characters of `set` at both ends; an empty `set` strips whitespace (the
+// builtin `trim`).
+pub fn strip_chars(s: Str, set: Str) -> Str
+= strip_end_chars(strip_start_chars(s, set), set)
+
+// `s` without the characters of `set` at the start; an empty `set` strips whitespace.
+pub fn strip_start_chars(s: Str, set: Str) -> Str
+= do
+  cs = s.chars
+  var k = 0
+  var going = true
+  for c in cs
+    if going and in_set(c, set) then k := k + 1 else going := false
+  s.drop(k)
+
+// `s` without the characters of `set` at the end; an empty `set` strips whitespace.
+pub fn strip_end_chars(s: Str, set: Str) -> Str
+= strip_start_chars(s.reverse, set).reverse
+
+fn in_set(c: Str, set: Str) -> Bool
+= if set.is_empty then is_ws(c) else set.contains(c)
+
+// `s` without any of the characters in `set` (Commons `CharSetUtils.delete`).
+pub fn remove_chars(s: Str, set: Str) -> Str
+= s.chars.filter(c => not set.contains(c)).join("")
+
+// Only the characters of `s` that are in `set` (Commons `CharSetUtils.keep`).
+pub fn keep_chars(s: Str, set: Str) -> Str
+= s.chars.filter(c => set.contains(c)).join("")
+
+// `s` with every run of one repeated character from `set` squeezed to one: `squeeze("aabbcc",
+// "ab")` is `"abcc"`. An empty `set` squeezes every repeated character.
+pub fn squeeze(s: Str, set: Str) -> Str
+= do
+  cs = s.chars
+  (0..cs.len).filter(i => not (i > 0 and cs[i] == cs[i - 1] and (set.is_empty or set.contains(cs[i])))).map(i => cs[i]).join("")
+
+// How many characters of `s` are in `set`.
+pub fn count_chars(s: Str, set: Str) -> Int
+  post r >= 0 and r <= s.len
+= s.chars.filter(c => set.contains(c)).len
+
+// Only the decimal digits of `s` (see `is_numeric`): `digits_only("(555) 123-4567")` is
+// `"5551234567"`.
+pub fn digits_only(s: Str) -> Str
+= s.chars.filter(is_dig).join("")
+
+// `s` without any whitespace characters.
+pub fn delete_whitespace(s: Str) -> Str
+= s.chars.filter(c => not is_ws(c)).join("")
+
+// `s` trimmed, with every run of whitespace inside it replaced by one space.
+pub fn normalize_space(s: Str) -> Str
+= split_ws(s).join(" ")
+
+// `s` without every occurrence of `sub`; `s` when `sub` is empty.
+pub fn remove_all(s: Str, sub: Str) -> Str
+= if sub.is_empty then s else s.replace(sub, "")
+
+// ---------- searching ----------
+
+fn match_at(cs: List[Str], i: Int, ks: List[Str]) -> Bool
+= ks.len > 0 and i + ks.len <= cs.len and (0..ks.len).all(j => cs[i + j] == ks[j])
+
+// The start index of every non-overlapping occurrence of `sub` in `s`, left to right; `[]` when
+// `sub` is empty.
+pub fn indexes_of(s: Str, sub: Str) -> List[Int]
+= do
+  if sub.is_empty then return []
+  parts = s.split(sub)
+  k = sub.len
+  parts.take(parts.len - 1).map(_.len).scan(0, (a, n) => a + n + k).map(e => e - k)
+
+// How many non-overlapping times `sub` occurs in `s` (Commons `countMatches`); 0 when `sub` is
+// empty: `count_matches("aaaa", "aa")` is 2.
+pub fn count_matches(s: Str, sub: Str) -> Int
+  post r >= 0
+= if sub.is_empty then 0 else s.split(sub).len - 1
+
+// The index of the first `sub` in `s` at or after `from`; a negative `from` counts as 0, and an
+// empty `sub` is found at `from` while `from` is within the string.
+pub fn index_of_from(s: Str, sub: Str, from: Int) -> Opt[Int]
+= do
+  f = max(from, 0)
+  if f > s.len then none else s.drop(f).index_of(sub).map(i => i + f)
+
+// The index of the last `sub` in `s`; an empty `sub` is found at `s.len`.
+pub fn last_index_of(s: Str, sub: Str) -> Opt[Int]
+= s.reverse.index_of(sub.reverse).map(i => s.len - sub.len - i)
+
+// The index of the `n`th occurrence of `sub` in `s`, counting overlapping occurrences as Commons
+// `ordinalIndexOf` does (`ordinal_index_of("aaa", "aa", 2)` is `some(1)`); an empty `sub` is
+// found at 0.
+pub fn ordinal_index_of(s: Str, sub: Str, n: Int where _ >= 1) -> Opt[Int]
+  post r.is_none or r.get >= 0
+= do
+  if sub.is_empty then return some(0)
+  cs = s.chars
+  ks = sub.chars
+  var seen = 0
+  for i in 0..cs.len
+    if match_at(cs, i, ks) then do
+      seen := seen + 1
+      if seen == n then return some(i)
+  none
+
+// The index of the first character of `s` that is in `chars`.
+pub fn index_of_any(s: Str, chars: Str) -> Opt[Int]
+= s.chars.find_index(c => chars.contains(c))
+
+// The index of the first character of `s` that is not in `chars`.
+pub fn index_of_any_but(s: Str, chars: Str) -> Opt[Int]
+= s.chars.find_index(c => not chars.contains(c))
+
+// The index of the last character of `s` that is in `chars`.
+pub fn last_index_of_any(s: Str, chars: Str) -> Opt[Int]
+= s.reverse.chars.find_index(c => chars.contains(c)).map(i => s.len - 1 - i)
+
+// The earliest index at which any of the non-empty strings in `subs` occurs in `s`.
+pub fn index_of_first(s: Str, subs: List[Str]) -> Opt[Int]
+= subs.filter(x => not x.is_empty).fold(none, (best, x) => do
+  match s.index_of(x)
+  | some(i) => some(min(i, best.or(i)))
+  | none => best)
+
+// Whether `s` contains any character of `chars`.
+pub fn contains_any(s: Str, chars: Str) -> Bool
+= s.chars.any(c => chars.contains(c))
+
+// Whether `s` contains none of the characters of `chars`; true for an empty `s` or `chars`.
+pub fn contains_none(s: Str, chars: Str) -> Bool
+= not contains_any(s, chars)
+
+// Whether every character of `s` is one of `chars`; true for an empty `s`.
+pub fn contains_only(s: Str, chars: Str) -> Bool
+= s.chars.all(c => chars.contains(c))
+
+// Whether `s` contains at least one of `subs`.
+pub fn contains_any_of(s: Str, subs: List[Str]) -> Bool
+= subs.any(x => s.contains(x))
+
+// Whether `s` contains every one of `subs`; true for an empty list.
+pub fn contains_all_of(s: Str, subs: List[Str]) -> Bool
+= subs.all(x => s.contains(x))
+
+// ---------- replacing ----------
+
+// `s` with the first `a` replaced by `b`; `s` when `a` is empty or missing.
+pub fn replace_once(s: Str, a: Str, b: Str) -> Str
+= replace_n(s, a, b, 1)
+
+// `s` with the last `a` replaced by `b`; `s` when `a` is empty or missing.
+pub fn replace_last(s: Str, a: Str, b: Str) -> Str
+= match split_last(s, a)
+| some((x, y)) => x + b + y
+| none => s
+
+// `s` with the first `n` non-overlapping occurrences of `a` replaced by `b`, left to right; `s`
+// when `a` is empty or `n` is 0.
+pub fn replace_n(s: Str, a: Str, b: Str, n: Int where _ >= 0) -> Str
+  post n > 0 or r == s
+= do
+  if a.is_empty or n == 0 then return s
+  parts = s.split(a)
+  if parts.len - 1 <= n then parts.join(b) else parts.take(n + 1).join(b) + a + parts.drop(n + 1).join(a)
+
+fn each_step(st: (Int, Str), i: Int, cs: List[Str], hits: List[Int], ps: List[(List[Str], Str)]) -> (Int, Str)
+= if i < st.0 then (st.0, "") else if hits[i] >= 0 then (i + ps[hits[i]].0.len, ps[hits[i]].1) else (i + 1, cs[i])
+
+// `s` with every key of `pairs` replaced by its value in one pass (Commons `replaceEach`), so a
+// replacement is never replaced again: `replace_each("ab", [("a", "b"), ("b", "a")])` is `"ba"`.
+// At each position the first pair in list order whose key matches wins; empty keys are ignored.
+pub fn replace_each(s: Str, pairs: List[(Str, Str)]) -> Str
+= do
+  ps = pairs.filter(p => not p.0.is_empty).map(p => (p.0.chars, p.1))
+  if ps.is_empty then return s
+  cs = s.chars
+  hits = (0..cs.len).map(i => ps.find_index(p => match_at(cs, i, p.0)).or(-1))
+  (0..cs.len).scan((0, ""), (st, i) => each_step(st, i, cs, hits, ps)).map(_.1).join("")
+
+// `s` with each character of `from` replaced by the character at the same index of `to`, and
+// characters of `from` beyond the end of `to` deleted (Commons `replaceChars`, like `tr`).
+pub fn replace_chars(s: Str, from: Str, to: Str) -> Str
+= do
+  fs = from.chars
+  ts = to.chars
+  s.chars.map(c => do
+    match fs.index_of(c)
+    | some(i) => ts.get(i).or("")
+    | none => c).join("")
+
+// `s` with the characters from `start` to `end` replaced by `x` (Commons `overlay`): indexes are
+// clamped to the string and swapped when `start > end`, so `overlay("abcdef", "zz", 2, 4)` is
+// `"abzzef"` and an index past the end appends.
+pub fn overlay(s: Str, x: Str, start: Int, end: Int) -> Str
+= do
+  n = s.len
+  a = clamp(min(start, end), 0, n)
+  b = clamp(max(start, end), 0, n)
+  s.take(a) + x + s.drop(b)
+
+// `s` with `x` inserted before the character at `pos`, clamped to the string (0 prepends,
+// `s.len` or more appends, negative counts from the end).
+pub fn insert_at(s: Str, pos: Int, x: Str) -> Str
+  post r.len == s.len + x.len
+= do
+  i = norm_index(pos, s.len)
+  s.take(i) + x + s.drop(i)
+
+// ---------- distance and similarity ----------
+
+fn lev_core(x: List[Int], y: List[Int], cap: Int) -> Opt[Int]
+= do
+  n = y.len
+  var prev = (0..n + 1).map(j => j)
+  for i in 0..x.len
+    p = prev
+    cur = [i + 1].concat((0..n).scan(i + 1, (left, j) => min(min(p[j + 1] + 1, left + 1), p[j] + (if x[i] == y[j] then 0 else 1))))
+    if cap >= 0 and cur.min.or(0) > cap then return none
+    prev := cur
+  d = prev[n]
+  if cap >= 0 and d > cap then none else some(d)
+
+// The Levenshtein edit distance between `a` and `b`: the fewest single-character insertions,
+// deletions and substitutions that turn one into the other, over code points.
+pub fn levenshtein(a: Str, b: Str) -> Int
+  post r >= 0 and r <= max(a.len, b.len)
+= lev_core(a.codes, b.codes, -1).or(0)
+
+// The Levenshtein distance between `a` and `b` when it is at most `limit`, else `none`; it stops
+// as soon as every path costs more, so a small limit is fast on long strings.
+pub fn levenshtein_within(a: Str, b: Str, limit: Int where _ >= 0) -> Opt[Int]
+  post r.is_none or r.get <= limit
+= if (a.len - b.len).abs > limit then none else lev_core(a.codes, b.codes, limit)
+
+// The Damerau-Levenshtein distance in its optimal string alignment form: like `levenshtein`, and
+// swapping two adjacent characters costs 1, but no substring is edited twice (so `"ca"` to
+// `"abc"` is 3).
+pub fn damerau_levenshtein(a: Str, b: Str) -> Int
+  post r >= 0 and r <= max(a.len, b.len)
+= do
+  x = a.codes
+  y = b.codes
+  n = y.len
+  var pp = (0..n + 1).map(j => j)
+  var prev = (0..n + 1).map(j => j)
+  for i in 0..x.len
+    p = prev
+    q = pp
+    cur = [i + 1].concat((0..n).scan(i + 1, (left, j) => osa_cell(x, y, i, j, p, q, left)))
+    pp := prev
+    prev := cur
+  prev[n]
+
+// The Hamming distance, the number of positions where `a` and `b` differ; `none` unless they
+// have the same length in code points.
+pub fn hamming(a: Str, b: Str) -> Opt[Int]
+  post r.is_none or r.get >= 0
+= if a.len != b.len then none else some(a.chars.zip(b.chars).filter(p => p.0 != p.1).len)
+
+// The Jaro similarity of `a` and `b`, from 0.0 (nothing in common) to 1.0 (equal); two empty
+// strings are 1.0 and one empty string is 0.0.
+pub fn jaro(a: Str, b: Str) -> F64
+  post r >= 0.0 and r <= 1.0
+= do
+  x = a.codes
+  y = b.codes
+  if x.is_empty and y.is_empty then return 1.0
+  if x.is_empty or y.is_empty then return 0.0
+  w = max(max(x.len, y.len) / 2 - 1, 0)
+  var my = bits(y.len)
+  var mx = bits(x.len)
+  var m = 0
+  for i in 0..x.len
+    var found = false
+    for j in max(0, i - w)..min(i + w + 1, y.len)
+      if not found and not my.has(j) and x[i] == y[j] then do
+        my := my.set(j)
+        mx := mx.set(i)
+        m := m + 1
+        found := true
+  if m == 0 then return 0.0
+  fx = mx
+  fy = my
+  xs = (0..x.len).filter(i => fx.has(i)).map(i => x[i])
+  ys = (0..y.len).filter(j => fy.has(j)).map(j => y[j])
+  half = xs.zip(ys).filter(p => p.0 != p.1).len.to_f64 / 2.0
+  mf = m.to_f64
+  min((mf / x.len.to_f64 + mf / y.len.to_f64 + (mf - half) / mf) / 3.0, 1.0)
+
+// The Jaro-Winkler similarity: `jaro` raised for a common prefix of up to 4 characters with the
+// usual scaling factor 0.1, from 0.0 to 1.0. The boost applies at every Jaro score, as in Commons
+// Text and the Wikipedia definition.
+pub fn jaro_winkler(a: Str, b: Str) -> F64
+  post r >= 0.0 and r <= 1.0
+= do
+  j = jaro(a, b)
+  l = min(prefix_len(a.chars, b.chars), 4)
+  min(j + l.to_f64 * 0.1 * (1.0 - j), 1.0)
+
+fn osa_cell(x: List[Int], y: List[Int], i: Int, j: Int, p: List[Int], q: List[Int], left: Int) -> Int
+= do
+  v = min(min(p[j + 1] + 1, left + 1), p[j] + (if x[i] == y[j] then 0 else 1))
+  if i > 0 and j > 0 and x[i] == y[j - 1] and x[i - 1] == y[j] then min(v, q[j - 1] + 1) else v
+
+// The length of the longest common subsequence of `a` and `b` (characters in order, not
+// necessarily adjacent): `lcs_length("ABCBDAB", "BDCABA")` is 4.
+pub fn lcs_length(a: Str, b: Str) -> Int
+  post r >= 0 and r <= min(a.len, b.len)
+= do
+  x = a.codes
+  y = b.codes
+  n = y.len
+  var prev = (0..n + 1).map(j => 0)
+  for i in 0..x.len
+    p = prev
+    prev := [0].concat((0..n).scan(0, (left, j) => if x[i] == y[j] then p[j] + 1 else max(p[j + 1], left)))
+  prev[n]
+
+// The longest string that occurs in both `a` and `b`, the leftmost in `a` on a tie; `""` when
+// they share no character.
+pub fn longest_common_substring(a: Str, b: Str) -> Str
+  post a.contains(r) and b.contains(r)
+= do
+  x = a.codes
+  y = b.codes
+  n = y.len
+  var prev = (0..n + 1).map(j => 0)
+  var best = 0
+  var end = 0
+  for i in 0..x.len
+    p = prev
+    cur = [0].concat((0..n).map(j => if x[i] == y[j] then p[j] + 1 else 0))
+    m = cur.max.or(0)
+    if m > best then do
+      best := m
+      end := i + 1
+    prev := cur
+  a.drop(end - best).take(best)
+
+// How similar `a` and `b` are by edit distance, `1 - levenshtein / longer length`, from 0.0 to
+// 1.0; two empty strings are 1.0.
+pub fn similarity(a: Str, b: Str) -> F64
+  post r >= 0.0 and r <= 1.0
+= do
+  n = max(a.len, b.len)
+  if n == 0 then 1.0 else 1.0 - levenshtein(a, b).to_f64 / n.to_f64
+
+// The candidate closest to `s` by Levenshtein distance, the first one on a tie; `none` for an
+// empty list. For "did you mean" hints, compare the distance with a cut-off yourself.
+pub fn closest(s: Str, candidates: List[Str]) -> Opt[Str]
+= candidates.fold(none, (best, c) => do
+  match best
+  | none => some((c, levenshtein(s, c)))
+  | some((_, d)) => do
+    e = levenshtein(s, c)
+    if e < d then some((c, e)) else best).map(p => p.0)
+
+// ---------- natural order ----------
+
+fn nat_tokens(s: Str) -> List[(Bool, Str)]
+= do
+  cs = s.chars
+  ds = cs.map(c => if c >= "0" and c <= "9" then 1 else 0)
+  runs_by(cs, ds).map(t => (t.take(1) >= "0" and t.take(1) <= "9", t))
+
+fn nat_cmp_token(a: (Bool, Str), b: (Bool, Str)) -> Int
+= match (a, b)
+| ((true, x), (true, y)) => do
+  xs = strip_start_chars(x, "0")
+  ys = strip_start_chars(y, "0")
+  if xs.len != ys.len then (if xs.len < ys.len then -1 else 1) else cmp_str(xs, ys)
+| ((true, _), (false, _)) => -1
+| ((false, _), (true, _)) => 1
+| ((false, x), (false, y)) => cmp_str(x, y)
+
+// Compares `a` and `b` in natural order, with runs of ASCII digits compared as numbers, so
+// `"file2" < "file10"`: negative, 0 or positive. Leading zeros don't change a number's value;
+// strings that only differ in them, and everything else, fall back to code point order, so only
+// equal strings compare 0.
+pub fn natural_compare(a: Str, b: Str) -> Int
+= do
+  ta = nat_tokens(a)
+  tb = nat_tokens(b)
+  n = min(ta.len, tb.len)
+  for i in 0..n
+    c = nat_cmp_token(ta[i], tb[i])
+    if c != 0 then return c
+  if ta.len != tb.len then (if ta.len < tb.len then -1 else 1) else cmp_str(a, b)
+
+// `xs` sorted in natural order (see `natural_compare`); the sort is stable.
+pub fn natural_sort(xs: List[Str]) -> List[Str]
+  post r.len == xs.len
+= xs.sort_with(natural_compare)
+
+// ---------- wrapping and indentation ----------
+
+fn split_long(w: Str, width: Int) -> List[Str]
+= do
+  gs = cluster_codes(w)
+  rows = gs.map(cluster_width).scan((0, -1), (st, x) => if st.1 < 0 then (st.0, x) else if st.1 + x <= width then (st.0, st.1 + x) else (st.0 + 1, x)).map(_.0)
+  runs_by(gs.map(str_of), rows)
+
+fn wrap_step(st: (Int, Int), w: Int, width: Int) -> (Int, Int)
+= if st.1 < 0 then (st.0, w) else if st.1 + 1 + w <= width then (st.0, st.1 + 1 + w) else (st.0 + 1, w)
+
+fn wrap_line(line: Str, width: Int, break_long: Bool) -> List[Str]
+= do
+  words = split_ws(line).flat_map(w => if break_long and display_width(w) > width then split_long(w, width) else [w])
+  if words.is_empty then return [""]
+  rows = words.map(display_width).scan((0, -1), (st, w) => wrap_step(st, w, width)).map(_.0)
+  starts = (0..words.len).filter(i => i == 0 or rows[i] != rows[i - 1])
+  starts.zip(starts.drop(1).push(words.len)).map(p => words.slice(p.0, p.1).join(" "))
+
+// `s` word-wrapped into lines of at most `width` display columns (see `display_width`). Each line
+// of the input is wrapped on its own, so existing line breaks and blank lines stay; runs of
+// whitespace between words become one space. With `break_long`, a word wider than `width` is
+// cut into pieces; without it, it stands alone on a longer line.
+pub fn wrap_lines(s: Str, width: Int where _ >= 1, break_long: Bool) -> List[Str]
+  post not break_long or r.all(l => display_width(l) <= width)
+= lines(s).flat_map(l => wrap_line(l, width, break_long))
+
+// `s` wrapped to `width` columns with `\n` between lines, not breaking long words (WordUtils
+// `wrap`); see `wrap_lines`.
+pub fn wrap(s: Str, width: Int where _ >= 1) -> Str
+  post r.len <= s.len
+= wrap_lines(s, width, false).join("\n")
+
+// `s` wrapped to `width` columns with `newline` between lines; `break_long` cuts words wider than
+// `width`. See `wrap_lines`.
+pub fn wrap_with(s: Str, width: Int where _ >= 1, newline: Str, break_long: Bool) -> Str
+  post break_long or newline.len != 1 or r.len <= s.len
+= wrap_lines(s, width, break_long).join(newline)
+
+// `s` with the lines of each paragraph joined by single spaces; paragraphs are separated by blank
+// lines and come back separated by one blank line (`"\n\n"`). The inverse of `wrap`, up to
+// whitespace.
+pub fn unwrap(s: Str) -> Str
+= do
+  ls = lines(s)
+  blank = ls.map(is_blank)
+  pid = blank.scan((0, true), (st, b) => if b then (st.0, true) else if st.1 then (st.0 + 1, false) else (st.0, false)).map(_.0)
+  idx = (0..ls.len).filter(i => not blank[i])
+  starts = (0..idx.len).filter(k => k == 0 or pid[idx[k]] != pid[idx[k - 1]])
+  starts.zip(starts.drop(1).push(idx.len)).map(p => idx.slice(p.0, p.1).map(i => normalize_space(ls[i])).join(" ")).join("\n\n")
+
+// `s` with `prefix` added at the start of every line that is not blank (Python `textwrap.indent`);
+// line breaks are kept as they are.
+pub fn indent(s: Str, prefix: Str) -> Str
+= s.split("\n").map(l => if is_blank(l) then l else prefix + l).join("\n")
+
+// `s` with the whitespace prefix common to all of its non-blank lines removed (Python
+// `textwrap.dedent`); blank lines become empty. Tabs and spaces are different characters here.
+pub fn dedent(s: Str) -> Str
+= do
+  ls = s.split("\n")
+  pres = ls.filter(l => not is_blank(l)).map(l => l.take(l.len - strip_start_chars(l, "").len))
+  p = common_prefix(pres).len
+  ls.map(l => if is_blank(l) then "" else l.drop(p)).join("\n")
+
+// `s` between two copies of `q`: `surround("a", "'")` is `"'a'"`.
+pub fn surround(s: Str, q: Str) -> Str
+= q + s + q
+
+// `s` with `q` added at the start and at the end where it is missing.
+pub fn surround_if_missing(s: Str, q: Str) -> Str
+= ensure_suffix(ensure_prefix(s, q), q)
+
+// `s` without one `q` at each end when it starts and ends with `q` (and is long enough to hold
+// both); otherwise `s`.
+pub fn unsurround(s: Str, q: Str) -> Str
+= if not q.is_empty and s.len >= 2 * q.len and s.starts_with(q) and s.ends_with(q) then s.drop(q.len).take(s.len - 2 * q.len) else s
+
+// ---------- accents, transliteration and slugs ----------
+
+// `s` without diacritics: precomposed Latin letters with accents, and letters with a stroke
+// (`ø`, `ł`, `đ`, `ħ`), become their base letters, from the Latin-1 Supplement, Latin
+// Extended-A and B and Latin Extended Additional (so Vietnamese works), and combining marks
+// U+0300 to U+036F are removed, which handles decomposed text. Ligatures and letters such as
+// `æ`, `ß` and `þ` are not accented letters and stay (see `to_ascii`); Greek, Cyrillic and other
+// scripts are unchanged.
+pub fn strip_accents(s: Str) -> Str
+= s.codes.map(c => if c >= 768 and c <= 879 then "" else if c >= 192 and not accent_base(c).is_empty then accent_base(c) else str_of([c])).join("")
+
+// `s` spelled in ASCII where it can be: accents stripped (`strip_accents`), ligatures and special
+// letters expanded (`æ` to `ae`, `ß` to `ss`, `þ` to `th`), typographic quotes, dashes, spaces
+// and the ellipsis made plain, and a few symbols spelled out (`©` to `(c)`, `€` to `EUR`). Any
+// other non-ASCII character becomes `replacement` (`""` drops it).
+pub fn to_ascii(s: Str, replacement: Str) -> Str
+  post replacement.codes.any(c => c >= 128) or r.codes.all(c => c < 128)
+= strip_accents(s).codes.map(c => if c < 128 then str_of([c]) else if translit_extra(c).is_empty then replacement else translit_extra(c)).join("")
+
+// The default slug options: `-` between words, no length limit, lowercase.
+pub fn slug_options() -> SlugOptions
+= SlugOptions{sep: "-", max_len: 0, lowercase: true}
+
+// A URL slug of `s` with the default options: `slugify("Crème Brûlée & Co.")` is
+// `"creme-brulee-and-co"`. See `slugify_with`.
+pub fn slugify(s: Str) -> Str
+  post r.codes.all(c => c < 128)
+= slugify_with(s, slug_options())
+
+// A URL slug of `s`: transliterated to ASCII (`to_ascii`), `&` spelled `and`, lowercased when
+// `o.lowercase`, and every run of characters other than ASCII letters and digits replaced by
+// `o.sep`, with none at the ends. With `o.max_len > 0` the slug is cut to that many characters,
+// at the last separator that fits when there is one, and never ends in a separator. Text with
+// no letters or digits gives `""`.
+pub fn slugify_with(s: Str, o: SlugOptions) -> Str
+  post o.max_len == 0 or r.len <= o.max_len
+= do
+  t = to_ascii(s.replace("&", " and "), " ")
+  u = if o.lowercase then t.lower else t
+  words = split_any(u.chars.map(c => if c.codes.all(k => k >= 48 and k <= 57 or k >= 65 and k <= 90 or k >= 97 and k <= 122) then c else " ").join(""), " ")
+  slug = words.join(o.sep)
+  if o.max_len == 0 or slug.len <= o.max_len then return slug
+  ends = words.map(_.len).scan(0 - o.sep.len, (a, n) => a + o.sep.len + n)
+  k = ends.filter(e => e <= o.max_len).len
+  if k == 0 then strip_end_chars(slug.take(o.max_len), o.sep) else words.take(k).join(o.sep)
+
+// `base` if it is not in `taken`, else the first of `base-2`, `base-3`, ... that is not, for
+// unique URLs: `unique_slug("post", ["post", "post-2"])` is `"post-3"`.
+pub fn unique_slug(base: Str, taken: List[Str]) -> Str
+  post not taken.contains(r)
+= do
+  seen = taken.to_hash_set
+  if not seen.has(base) then return base
+  var k = 2
+  for i in 0..taken.len + 1
+    if seen.has("{base}-{k}") then k := k + 1
+  "{base}-{k}"
+
+// ---------- escaping and quoting ----------
+
+// `s` with `&`, `<`, `>`, `"` and `'` replaced by character references (`&amp;`, `&lt;`, `&gt;`,
+// `&quot;`, `&#39;`), safe in HTML text and in quoted attribute values.
+pub fn escape_html(s: Str) -> Str
+= replace_each(s, [("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"), ("\"", "&quot;"), ("'", "&#39;")])
+
+// `s` with the five XML special characters escaped as `&amp;`, `&lt;`, `&gt;`, `&quot;` and
+// `&apos;`.
+pub fn escape_xml(s: Str) -> Str
+= replace_each(s, [("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"), ("\"", "&quot;"), ("'", "&apos;")])
+
+fn parse_radix(ds: Str, radix: Int) -> Opt[Int]
+= do
+  if ds.is_empty or ds.len > 8 then return none
+  var v = 0
+  for c in ds.lower.codes
+    d = if c >= 48 and c <= 57 then c - 48 else if c >= 97 and c <= 102 then c - 87 else 99
+    if d >= radix then return none
+    v := v * radix + d
+  some(v)
+
+fn char_ref(body: Str, named: Bool) -> Opt[Str]
+= do
+  code = if body.starts_with("#x") or body.starts_with("#X") then parse_radix(body.drop(2), 16) else if body.starts_with("#") then parse_radix(body.drop(1), 10) else if named then (if entity_code(body) >= 0 then some(entity_code(body)) else none) else match body
+  | "amp" => some(38)
+  | "lt" => some(60)
+  | "gt" => some(62)
+  | "quot" => some(34)
+  | "apos" => some(39)
+  | _ => none
+  match code
+  | some(c) if c > 0 and c <= 1114111 and not (c >= 55296 and c <= 57343) => from_codes([c])
+  | _ => none
+
+fn ref_part(p: Str, named: Bool) -> Str
+= match p.take(33).index_of(";")
+| some(k) if k > 0 => ref_decoded(p, k, named)
+| _ => "&" + p
+
+fn ref_decoded(p: Str, k: Int, named: Bool) -> Str
+= match char_ref(p.take(k), named)
+| some(r) => r + p.drop(k + 1)
+| none => "&" + p
+
+fn unescape_refs(s: Str, named: Bool) -> Str
+= match s.split("&")
+| [] => s
+| [first, ..rest] => first + rest.map(p => ref_part(p, named)).join("")
+
+// `s` with character references decoded: the HTML 4 named references (`&amp;`, `&eacute;`,
+// `&nbsp;`, `&euro;` and the rest of the 252) plus `&apos;`, and decimal and hexadecimal ones
+// (`&#233;`, `&#xE9;`). References must end in `;`; unknown names, invalid code points and
+// surrogates are left as they are. HTML5's references without `;` are not decoded.
+pub fn unescape_html(s: Str) -> Str
+= unescape_refs(s, true)
+
+// `s` with the five XML entities and numeric character references decoded; anything else is
+// left as it is.
+pub fn unescape_xml(s: Str) -> Str
+= unescape_refs(s, false)
+
+fn hex4(c: Int) -> Str
+= "\\u" + c.format("04x")
+
+// `s` escaped for the inside of a JSON string: `"` and `\` get a backslash, `\b \f \n \r \t` use
+// their short forms, other control characters and U+2028 and U+2029 (which break JavaScript)
+// become `\u00XX` forms; everything else stays as UTF-8. No quotes are added.
+pub fn escape_json(s: Str) -> Str
+= s.codes.map(json_esc).join("")
+
+// `s` as a JSON string literal: `escape_json(s)` between double quotes.
+pub fn quote_json(s: Str) -> Str
+  post r.starts_with("\"") and r.ends_with("\"")
+= "\"" + escape_json(s) + "\""
+
+type JsonSt = {emit: Str, mode: Int, hex: Int, hi: Int, bad: Bool}
+
+fn json_simple(e: Str) -> Int
+= match e
+| "\"" => 34
+| "\\" => 92
+| "/" => 47
+| "b" => 8
+| "f" => 12
+| "n" => 10
+| "r" => 13
+| "t" => 9
+| _ => -1
+
+fn emit_unit(st: JsonSt, u: Int) -> JsonSt
+= if u >= 55296 and u <= 56319 then (if st.hi >= 0 then st with bad := true else st with hi := u, emit := "", mode := 0) else if u >= 56320 and u <= 57343 then (if st.hi < 0 then st with bad := true else st with emit := str_of([65536 + (st.hi - 55296) * 1024 + (u - 56320)]), hi := -1, mode := 0) else if st.hi >= 0 then st with bad := true else st with emit := str_of([u]), mode := 0
+
+fn json_step(st0: JsonSt, c: Str) -> JsonSt
+= do
+  st = st0 with emit := ""
+  if st.bad then return st
+  if st.mode == 0 then return if c == "\\" then st with mode := 1 else if st.hi >= 0 then st with bad := true else st with emit := c
+  if st.mode == 1 then return if json_simple(c) >= 0 then (if st.hi >= 0 then st with bad := true else st with emit := str_of([json_simple(c)]), mode := 0) else if c == "u" then st with mode := 2, hex := 0 else st with bad := true
+  d = hex_val(code_of(c))
+  if d < 0 then return st with bad := true
+  if st.mode == 5 then emit_unit(st, st.hex * 16 + d) else st with hex := st.hex * 16 + d, mode := st.mode + 1
+
+// The text of a JSON string's inside with its escapes decoded (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`,
+// `\r`, `\t` and `\uXXXX`, with surrogate pairs combined); `none` for an unknown escape, a
+// truncated one or an unpaired surrogate. Unescaped quotes and control characters are accepted.
+pub fn unescape_json(s: Str) -> Opt[Str]
+= do
+  st = s.chars.scan(JsonSt{emit: "", mode: 0, hex: 0, hi: -1, bad: false}, json_step)
+  match st.last
+  | some(l) if l.bad or l.mode != 0 or l.hi >= 0 => none
+  | _ => some(st.map(_.emit).join(""))
+
+// `s` quoted for a POSIX shell (`sh`, `bash`, `zsh`) as one word: unchanged when it is non-empty
+// and only has characters no shell treats specially (ASCII letters, digits and `_ - . / : = @ %
+// + ,`), else in single quotes with each `'` written `'"'"'` (Python `shlex.quote`).
+pub fn quote_shell(s: Str) -> Str
+= if not s.is_empty and s.codes.all(c => c >= 48 and c <= 57 or c >= 65 and c <= 90 or c >= 97 and c <= 122 or "_-./:=@%+,".contains(str_of([c]))) then s else "'" + s.replace("'", "'\"'\"'") + "'"
+
+// `s` with every regex metacharacter (`\ . ^ $ | ? * + ( ) [ ] { }`) escaped by a backslash, so
+// `regex(quote_regex(s))` matches `s` literally with SSPUR's regex syntax.
+pub fn quote_regex(s: Str) -> Str
+= s.chars.map(c => if "\\.^$|?*+()[]\{}".contains(c) then "\\" + c else c).join("")
+
+// `s` as one CSV field (RFC 4180): in double quotes, with each `"` doubled, when it contains a
+// comma, a double quote, a carriage return or a line feed; otherwise unchanged.
+pub fn quote_csv(s: Str) -> Str
+= if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r") then "\"" + s.replace("\"", "\"\"") + "\"" else s
+
+fn hex_digit(n: Int) -> Str
+= "0123456789ABCDEF".chars[n]
+
+fn json_esc(c: Int) -> Str
+= match c
+| 34 => "\\\""
+| 92 => "\\\\"
+| 8 => "\\b"
+| 12 => "\\f"
+| 10 => "\\n"
+| 13 => "\\r"
+| 9 => "\\t"
+| _ => if c < 32 or c == 8232 or c == 8233 then hex4(c) else str_of([c])
+
+// `s` percent-encoded for a URL component (RFC 3986): every UTF-8 byte except the unreserved
+// characters `A-Z a-z 0-9 - . _ ~` becomes `%XX` with uppercase hex, so spaces are `%20`.
+pub fn percent_encode(s: Str) -> Str
+= s.bytes.map(b => if b >= 48 and b <= 57 or b >= 65 and b <= 90 or b >= 97 and b <= 122 or b == 45 or b == 46 or b == 95 or b == 126 then str_of([b]) else "%" + hex_digit(b / 16) + hex_digit(b % 16)).join("")
+
+fn hex_val(b: Int) -> Int
+= if b >= 48 and b <= 57 then b - 48 else if b >= 97 and b <= 102 then b - 87 else if b >= 65 and b <= 70 then b - 55 else -1
+
+fn pct_step(st: (Int, Int, Int, Bool), b: Int) -> (Int, Int, Int, Bool)
+= do
+  (mode, acc, _, bad) = st
+  if mode == 0 then (if b == 37 then (1, 0, -1, bad) else (0, 0, b, bad)) else if hex_val(b) < 0 then (0, 0, -1, true) else if mode == 1 then (2, hex_val(b), -1, bad) else (0, 0, acc * 16 + hex_val(b), bad)
+
+// `s` with `%XX` escapes decoded; `none` when a `%` is not followed by two hex digits or the bytes
+// are not valid UTF-8. `+` stays `+`: replace it with a space first for form data.
+pub fn percent_decode(s: Str) -> Opt[Str]
+= do
+  st = s.bytes.scan((0, 0, -1, false), pct_step)
+  match st.last
+  | some((mode, _, _, bad)) if bad or mode != 0 => none
+  | _ => from_bytes(st.map(_.2).filter(b => b >= 0))
+
+// ---------- tests ----------
+
+fn cs(xs: List[Int]) -> Str
+= from_codes(xs).or("?")
+
+fn e_acute() -> Str
+= cs([101, 769])
+
+fn family() -> Str
+= cs([128104, 8205, 128105, 8205, 128103])
+
+fn flag_in() -> Str
+= cs([127470, 127475])
+
+test blank_checks = is_blank("") and is_blank(" \t\n") and is_blank(cs([160, 12288, 8203 - 3])) and not is_blank(" a ") and not is_blank(cs([8203]))
+
+test whitespace_checks = not is_whitespace("") and is_whitespace("  ") and not is_whitespace(" x") and contains_whitespace("a b") and not contains_whitespace("ab") and contains_whitespace(cs([97, 12288]))
+
+test blank_lists = is_any_blank(["a", " "]) and not is_any_blank([]) and not is_any_blank(["a"]) and is_all_blank([]) and is_all_blank(["", " "]) and not is_all_blank(["", "x"]) and is_any_empty(["a", ""]) and not is_any_empty(["a"])
+
+test defaults = default_if_empty("", "d") == "d" and default_if_empty(" ", "d") == " " and default_if_blank(" ", "d") == "d" and default_if_blank("x", "d") == "x"
+
+test first_non = first_non_blank(["", " ", "a", "b"]) == some("a") and first_non_blank([" "]) == none and first_non_empty(["", " "]) == some(" ") and first_non_empty([]) == none
+
+test to_none = trim_to_none("  a ") == some("a") and trim_to_none(" ") == none and none_if_empty("") == none and none_if_empty(" ") == some(" ")
+
+test numeric = is_numeric("0123") and is_numeric(cs([1633, 1634])) and is_numeric(cs([65297])) and not is_numeric("") and not is_numeric("-1") and not is_numeric("1.5") and not is_numeric("12a")
+
+test ascii_digits = is_ascii_digits("42") and not is_ascii_digits(cs([1633])) and not is_ascii_digits("")
+
+test alnum = is_alphanumeric("abc123") and is_alphanumeric("été2") and is_alphanumeric("日本") and not is_alphanumeric("") and not is_alphanumeric("a b") and not is_alphanumeric("a-b")
+
+test alpha_space = is_alpha_space("") and is_alpha_space("ab cd") and not is_alpha_space("ab1") and is_alphanumeric_space("a1 b2") and not is_alphanumeric_space("a_b")
+
+test ascii_preds = is_ascii("") and is_ascii("abc~") and not is_ascii("café") and is_ascii_printable("a b~") and not is_ascii_printable("a\tb") and not is_ascii_printable("é")
+
+test case_preds = is_all_upper("ABC") and not is_all_upper("AB1") and not is_all_upper("") and is_all_upper("ÉÀ") and is_all_lower("abc") and not is_all_lower("abC") and is_mixed_case("aB") and not is_mixed_case("ab1") and not is_mixed_case("日本")
+
+test graphemes_basic = graphemes("") == [] and graphemes("abc") == ["a", "b", "c"] and graphemes("a" + e_acute() + "b") == ["a", e_acute(), "b"] and graphemes("\r\nx") == ["\r\n", "x"]
+
+test graphemes_emoji = graphemes(family() + "x").len == 2 and graphemes(flag_in() + flag_in()).len == 2 and graphemes(cs([128077, 127997])).len == 1 and graphemes(cs([10084, 65039])).len == 1 and graphemes(cs([127462, 127463, 127464])).len == 2
+
+test graphemes_scripts = grapheme_count("नमस्ते") == 4 and grapheme_count(cs([4352, 4449, 4520])) == 1 and grapheme_count("日本語") == 3 and grapheme_count(cs([769, 97])) == 2
+
+test grapheme_count_t = grapheme_count("") == 0 and grapheme_count(e_acute() + e_acute()) == 2 and grapheme_count(family()) == 1
+
+test reverse_g = reverse_graphemes("") == "" and reverse_graphemes("ab" + e_acute()) == e_acute() + "ba" and reverse_graphemes(flag_in() + "x") == "x" + flag_in() and reverse_graphemes("a\r\nb") == "b\r\na"
+
+test take_drop_g = take_graphemes(e_acute() + "xy", 1) == e_acute() and take_graphemes("abc", 0) == "" and take_graphemes("abc", -2) == "" and take_graphemes("ab", 9) == "ab" and drop_graphemes(e_acute() + "xy", 1) == "xy" and drop_graphemes("ab", -1) == "ab" and drop_graphemes("ab", 5) == ""
+
+test widths = display_width("") == 0 and display_width("abc") == 3 and display_width("日本") == 4 and display_width(e_acute()) == 1 and display_width(family()) == 2 and display_width(flag_in()) == 2 and display_width("\t") == 0 and display_width("ｈｉ") == 4 and display_width(cs([10084, 65039])) == 2
+
+test pads = pad_left_width("ab", 5, ".") == "...ab" and pad_right_width("ab", 5, "-=") == "ab-=-" and pad_left_width("abcdef", 3, ".") == "abcdef" and pad_left_width("日本", 6, ".") == "..日本" and pad_right_width("x", 4, "日") == "x日 " and pad_left_width("x", 3, "") == "  x" and pad_left_width("x", -5, ".") == "x"
+
+test centers = center("ab", 6, "*") == "**ab**" and center("ab", 5, "*") == "*ab**" and center("", 3, " ") == "   " and center("abc", 2, "*") == "abc" and center("日", 4, "-") == "-日-"
+
+test abbreviations = abbreviate("abcdefg", 6) == "abc..." and abbreviate("abcdefg", 7) == "abcdefg" and abbreviate("abcdefg", 3) == "abc" and abbreviate("abcdefg", 0) == "" and abbreviate("", 4) == "" and abbreviate(e_acute().repeat(5), 4) == e_acute() + "..."
+
+test abbreviations_with = abbreviate_with("abcdefg", 5, "~") == "abcd~" and abbreviate_with("abcdefg", 1, "~") == "a" and abbreviate_with("abcdefg", 4, "") == "abcd" and abbreviate_with(family().repeat(3), 2, cs([8230])) == family() + cs([8230])
+
+test middle = abbreviate_middle("abcdef", 4, ".") == "ab.f" and abbreviate_middle("abcdef", 6, ".") == "abcdef" and abbreviate_middle("abcdef", 1, "..") == "a" and abbreviate_middle("abcdefgh", 5, "...") == "a...h" and abbreviate_middle("", 0, ".") == ""
+
+test words_abbrev = abbreviate_words("The quick brown fox", 12, "...") == "The quick..." and abbreviate_words("short", 10, "...") == "short" and abbreviate_words("Supercalifragilistic", 8, "...") == "Super..." and abbreviate_words("abc def", 2, "...") == "ab" and abbreviate_words("ab  cd ef", 7, "~") == "ab  cd~"
+
+test bytes_cut = truncate_bytes("héllo", 2) == "h" and truncate_bytes("héllo", 3) == "hé" and truncate_bytes("日本", 5) == "日" and truncate_bytes("abc", 0) == "" and truncate_bytes("", 3) == "" and truncate_bytes("abc", 99) == "abc"
+
+test repeat_seps = repeat_sep("ab", ", ", 3) == "ab, ab, ab" and repeat_sep("ab", "-", 0) == "" and repeat_sep("x", "-", 1) == "x" and repeat_sep("", ",", 3) == ",," and repeat_sep("a", "", 4) == "aaaa"
+
+test masks = mask("4111111111111111", 0, 4, "*") == "************1111" and mask("secret", 1, 1, "#") == "s####t" and mask("abc", 2, 2, "*") == "***" and mask("", 0, 0, "*") == "" and mask("日本語", 1, 0, "*") == "日**"
+
+test rotations = rotate_chars("abcdefg", 2) == "fgabcde" and rotate_chars("abcdefg", -2) == "cdefgab" and rotate_chars("abc", 3) == "abc" and rotate_chars("abc", 100) == "cab" and rotate_chars("", 5) == "" and rotate_chars("日本語", 1) == "語日本"
+
+test reverse_delim = reverse_delimited("a.b.c", ".") == "c.b.a" and reverse_delimited("abc", "") == "abc" and reverse_delimited("", ",") == "" and reverse_delimited("a::b", "::") == "b::a"
+
+test words_split = case_words("fooBar") == ["foo", "Bar"] and case_words("HTTPServer") == ["HTTP", "Server"] and case_words("version2Beta") == ["version2", "Beta"] and case_words("utf8 x86_64") == ["utf8", "x86", "64"] and case_words("  --hello__world--  ") == ["hello", "world"] and case_words("") == [] and case_words("ÉcoleNormale") == ["École", "Normale"] and case_words("iOS") == ["i", "OS"] and case_words("ABC") == ["ABC"]
+
+test camel_pascal = to_camel("Hello world_HTTP") == "helloWorldHttp" and to_camel("") == "" and to_camel("HTTPServer") == "httpServer" and to_pascal("HTTP server") == "HttpServer" and to_pascal("hello-world") == "HelloWorld" and to_pascal("...") == ""
+
+test snake_kebab = to_snake("HTTPServer") == "http_server" and to_snake("helloWorld 2x") == "hello_world_2x" and to_screaming_snake("maxRetryCount") == "MAX_RETRY_COUNT" and to_kebab("Hello World") == "hello-world" and to_kebab("") == "" and to_train("hello world") == "Hello-World" and to_dot("FooBarBaz") == "foo.bar.baz"
+
+test titles = to_title("the_quick-brownFox") == "The Quick Brown Fox" and to_title("") == "" and to_sentence("helloWorld") == "Hello world" and to_sentence("HTTP_SERVER_ERROR") == "Http server error" and to_sentence("") == ""
+
+test capitals = capitalize("hello") == "Hello" and capitalize("") == "" and capitalize("élan") == "Élan" and capitalize("ßa") == "SSa" and uncapitalize("Hello") == "hello" and uncapitalize("") == "" and uncapitalize("ABC") == "aBC"
+
+test swaps = swap_case("Hello World 1") == "hELLO wORLD 1" and swap_case("") == "" and swap_case("Éa日") == "éA日"
+
+test cap_words = capitalize_words("hello  wORLD\tx") == "Hello  WORLD\tX" and capitalize_words("") == "" and capitalize_fully("hELLO wORLD") == "Hello World" and capitalize_fully(" a ") == " A "
+
+test initials_t = initials("Ada  King lovelace") == "AKl" and initials("") == "" and initials("  ") == "" and initials("élan vital") == "év"
+
+test split_anys = split_any("a,b;;c", ",;") == ["a", "b", "c"] and split_any("", ",") == [] and split_any(" a  b ", "") == ["a", "b"] and split_any(",,,", ",") == []
+
+test split_keeps = split_any_keep("a,,b", ",") == ["a", "", "b"] and split_any_keep("", ",") == [""] and split_any_keep(",", ",") == ["", ""] and split_any_keep("a b", "") == ["a", "b"]
+
+test split_trims = split_trim(" a , b,,", ",") == ["a", "b"] and split_trim("", ",") == [] and split_trim(" x ", "") == ["x"] and split_trim("  ", "") == []
+
+test split_ns = split_n("a=b=c", "=", 2) == ["a", "b=c"] and split_n("a=b=c", "=", 1) == ["a=b=c"] and split_n("a=b=c", "=", 9) == ["a", "b", "c"] and split_n("abc", "", 2) == ["abc"] and split_n("", "=", 3) == [""] and split_n("a==", "=", 3) == ["a", "", ""]
+
+test split_lasts = split_last("a.b.c", ".") == some(("a.b", "c")) and split_last("abc", ".") == none and split_last("abc", "") == none and split_last("日.本", ".") == some(("日", "本"))
+
+test char_types = split_by_char_type("fooBar 42") == ["foo", "B", "ar", " ", "42"] and split_by_char_type("") == [] and split_by_char_type("ab:cd") == ["ab", ":", "cd"] and split_by_char_type_camel("ASFRules") == ["ASF", "Rules"] and split_by_char_type_camel("fooBar") == ["foo", "Bar"] and split_by_char_type_camel("number5") == ["number", "5"]
+
+test line_splits = lines("") == [] and lines("a\nb\n") == ["a", "b"] and lines("a\r\nb\rc") == ["a", "b", "c"] and lines("a\n\nb") == ["a", "", "b"] and lines("\n") == [""] and lines("\r\n\r\n") == ["", ""]
+
+test join_ne = join_non_empty(["a", "", "b"], ",") == "a,b" and join_non_empty([], ",") == "" and join_non_empty(["", ""], ",") == ""
+
+test chunking = chunks_of("abcde", 2) == ["ab", "cd", "e"] and chunks_of("", 3) == [] and chunks_of("日本語", 1) == ["日", "本", "語"]
+
+test prefixes = common_prefix(["interspecies", "interstellar", "interstate"]) == "inters" and common_prefix([]) == "" and common_prefix(["a"]) == "a" and common_prefix(["abc", ""]) == "" and common_prefix(["été", "étage"]) == "ét"
+
+test suffixes = common_suffix(["running", "jumping"]) == "ing" and common_suffix([]) == "" and common_suffix(["abc", "xyz"]) == ""
+
+test differences = index_of_difference("abcde", "abxyz") == some(2) and index_of_difference("ab", "ab") == none and index_of_difference("ab", "abc") == some(2) and index_of_difference("", "a") == some(0) and difference("abcde", "abxyz") == "xyz" and difference("abc", "abc") == "" and difference("abc", "ab") == ""
+
+test prefix_ops = remove_prefix("www.x.com", "www.") == "x.com" and remove_prefix("x", "www.") == "x" and remove_prefix("abc", "") == "abc" and remove_suffix("file.txt", ".txt") == "file" and remove_suffix("a", "ab") == "a" and ensure_prefix("x", "/") == "/x" and ensure_prefix("/x", "/") == "/x" and ensure_suffix("x", "/") == "x/" and ensure_suffix("", "/") == "/"
+
+test with_any = starts_with_any("http://a", ["ftp:", "http:"]) and not starts_with_any("x", []) and ends_with_any("a.png", [".jpg", ".png"]) and not ends_with_any("a.gif", [".jpg"])
+
+test ci = starts_with_ci("Hello", "hE") and starts_with_ci("STRASSE", "straß") and ends_with_ci("Hello", "LLO") and contains_ci("Hello World", "o w") and not contains_ci("abc", "d") and contains_ci("x", "")
+
+test lefts_rights = left("abc", 2) == "ab" and left("abc", 0) == "" and left("abc", -1) == "" and left("abc", 9) == "abc" and right("abc", 2) == "bc" and right("abc", -1) == "" and right("abc", 9) == "abc" and right("", 1) == ""
+
+test mids = mid("abcdef", 2, 3) == "cde" and mid("abc", -5, 2) == "ab" and mid("abc", 5, 2) == "" and mid("abc", 1, 0) == "" and mid("日本語", 1, 1) == "本"
+
+test substrings = substring("hello", 1, 3) == "el" and substring("hello", -3, -1) == "ll" and substring("hello", 3, 1) == "" and substring("hello", -99, 99) == "hello" and substring("", 0, 1) == "" and substring_from("hello", -2) == "lo" and substring_from("hello", 9) == "" and substring_from("hello", -9) == "hello"
+
+test befores = substring_before("a.b.c", ".") == "a" and substring_before("abc", ".") == "abc" and substring_before("abc", "") == "" and substring_after("a.b.c", ".") == "b.c" and substring_after("abc", ".") == "" and substring_after("abc", "") == "abc"
+
+test befores_last = substring_before_last("a.b.c", ".") == "a.b" and substring_before_last("abc", ".") == "abc" and substring_before_last("abc", "") == "abc" and substring_after_last("a.b.c", ".") == "c" and substring_after_last("abc", ".") == "" and substring_after_last("abc", "") == ""
+
+test betweens = between("a[b]c", "[", "]") == some("b") and between("a[b", "[", "]") == none and between("ab", "", "]") == none and between("<<x>>", "<<", ">>") == some("x") and between("[]", "[", "]") == some("")
+
+test betweens_all = between_all("[a][b]x[c", "[", "]") == ["a", "b"] and between_all("", "[", "]") == [] and between_all("x", "", "") == [] and between_all("\{\{a}}\{\{b}}", "\{\{", "}}") == ["a", "b"]
+
+test chomps = chomp("a\r\n") == "a" and chomp("a\n\n") == "a\n" and chomp("a\r") == "a" and chomp("a") == "a" and chomp("") == "" and chop("abc") == "ab" and chop("a\r\n") == "a" and chop("") == "" and chop("日") == ""
+
+test strips = strip_chars("xxaxx", "x") == "a" and strip_chars("  a  ", "") == "a" and strip_chars("", "x") == "" and strip_chars("xxx", "x") == "" and strip_start_chars("00120", "0") == "120" and strip_end_chars("1.500", "0") == "1.5" and strip_end_chars("a \t", "") == "a"
+
+test char_sets = remove_chars("hello", "lo") == "he" and remove_chars("abc", "") == "abc" and keep_chars("hello", "lo") == "llo" and keep_chars("abc", "") == "" and count_chars("hello", "l") == 2 and count_chars("", "a") == 0
+
+test squeezes = squeeze("aabbcc", "ab") == "abcc" and squeeze("aabbcc", "") == "abc" and squeeze("", "") == "" and squeeze("a  b   c", " ") == "a b c"
+
+test digit_ws = digits_only("(555) 123-4567") == "5551234567" and digits_only("abc") == "" and delete_whitespace(" a b\tc\n") == "abc" and normalize_space("  a   b \t c  ") == "a b c" and normalize_space("") == "" and remove_all("banana", "an") == "ba" and remove_all("abc", "") == "abc"
+
+test indexes = indexes_of("aaaa", "aa") == [0, 2] and indexes_of("abc", "") == [] and indexes_of("", "a") == [] and indexes_of("日本日本", "本") == [1, 3]
+
+test counting = count_matches("aaaa", "aa") == 2 and count_matches("abc", "") == 0 and count_matches("abcabc", "bc") == 2 and count_matches("", "") == 0
+
+test index_froms = index_of_from("abcabc", "b", 2) == some(4) and index_of_from("abc", "b", -5) == some(1) and index_of_from("abc", "b", 9) == none and index_of_from("abc", "", 3) == some(3) and index_of_from("abc", "", 4) == none
+
+test last_indexes = last_index_of("abcabc", "bc") == some(4) and last_index_of("abc", "x") == none and last_index_of("abc", "") == some(3) and last_index_of("日本日", "日") == some(2)
+
+test ordinals = ordinal_index_of("aabaabaa", "aa", 2) == some(3) and ordinal_index_of("aaa", "aa", 2) == some(1) and ordinal_index_of("abc", "x", 1) == none and ordinal_index_of("abc", "", 3) == some(0) and ordinal_index_of("ab", "b", 2) == none
+
+test any_indexes = index_of_any("zzabyycdxx", "by") == some(3) and index_of_any("abc", "") == none and index_of_any_but("aabc", "a") == some(2) and index_of_any_but("aaa", "a") == none and last_index_of_any("abcabc", "ab") == some(4) and last_index_of_any("", "a") == none
+
+test firsts = index_of_first("zzabyycdxx", ["cd", "yy"]) == some(4) and index_of_first("abc", []) == none and index_of_first("abc", [""]) == none and index_of_first("abc", ["x", "c"]) == some(2)
+
+test contains_sets = contains_any("abc", "xc") and not contains_any("abc", "") and contains_none("abc", "xyz") and contains_none("", "a") and contains_only("abab", "ab") and contains_only("", "ab") and not contains_only("abc", "ab")
+
+test contains_lists = contains_any_of("hello", ["x", "ell"]) and not contains_any_of("hello", []) and contains_all_of("hello", ["he", "lo"]) and contains_all_of("x", []) and not contains_all_of("hello", ["he", "z"])
+
+test replace_onces = replace_once("aaa", "a", "b") == "baa" and replace_once("abc", "", "x") == "abc" and replace_once("abc", "x", "y") == "abc" and replace_last("a.b.c", ".", "-") == "a.b-c" and replace_last("abc", "x", "y") == "abc" and replace_last("abc", "", "y") == "abc"
+
+test replace_ns = replace_n("aaaa", "a", "b", 2) == "bbaa" and replace_n("aaaa", "aa", "b", 9) == "bb" and replace_n("abc", "a", "x", 0) == "abc" and replace_n("abc", "", "x", 3) == "abc" and replace_n("日日", "日", "本", 1) == "本日"
+
+test replace_eaches = replace_each("ab", [("a", "b"), ("b", "a")]) == "ba" and replace_each("abc", []) == "abc" and replace_each("abc", [("", "x")]) == "abc" and replace_each("aab", [("a", "x"), ("aa", "y")]) == "xxb" and replace_each("aab", [("aa", "y"), ("a", "x")]) == "yb"
+
+test replace_charss = replace_chars("hello", "ho", "jy") == "jelly" and replace_chars("abc", "b", "") == "ac" and replace_chars("abc", "", "x") == "abc" and replace_chars("", "a", "b") == ""
+
+test overlays = overlay("abcdef", "zz", 2, 4) == "abzzef" and overlay("abcdef", "zz", 4, 2) == "abzzef" and overlay("abc", "z", -1, 0) == "zabc" and overlay("abc", "z", 9, 9) == "abcz" and overlay("", "z", 0, 0) == "z"
+
+test inserts = insert_at("abc", 1, "X") == "aXbc" and insert_at("abc", 0, "X") == "Xabc" and insert_at("abc", 9, "X") == "abcX" and insert_at("abc", -1, "X") == "abXc" and insert_at("", 5, "X") == "X"
+
+test lev = levenshtein("kitten", "sitting") == 3 and levenshtein("", "") == 0 and levenshtein("", "abc") == 3 and levenshtein("abc", "") == 3 and levenshtein("flaw", "lawn") == 2 and levenshtein("café", "cafe") == 1 and levenshtein("日本", "日本語") == 1
+
+test lev_within = levenshtein_within("kitten", "sitting", 3) == some(3) and levenshtein_within("kitten", "sitting", 2) == none and levenshtein_within("a", "abcdef", 2) == none and levenshtein_within("", "", 0) == some(0)
+
+test damerau = damerau_levenshtein("ca", "ac") == 1 and levenshtein("ca", "ac") == 2 and damerau_levenshtein("ca", "abc") == 3 and damerau_levenshtein("", "ab") == 2 and damerau_levenshtein("abcdef", "abcdfe") == 1
+
+test hammings = hamming("karolin", "kathrin") == some(3) and hamming("", "") == some(0) and hamming("a", "ab") == none and hamming("日本", "日米") == some(1)
+
+test jaros = (jaro("MARTHA", "MARHTA") - 0.9444).abs < 0.001 and jaro("", "") == 1.0 and jaro("a", "") == 0.0 and jaro("abc", "xyz") == 0.0 and jaro("same", "same") == 1.0 and (jaro("DIXON", "DICKSONX") - 0.7667).abs < 0.001
+
+test jaro_winklers = (jaro_winkler("MARTHA", "MARHTA") - 0.9611).abs < 0.001 and (jaro_winkler("DIXON", "DICKSONX") - 0.8133).abs < 0.001 and jaro_winkler("", "") == 1.0 and jaro_winkler("abc", "abc") == 1.0 and jaro_winkler("x", "") == 0.0
+
+test lcs = lcs_length("ABCBDAB", "BDCABA") == 4 and lcs_length("", "abc") == 0 and lcs_length("abc", "abc") == 3 and longest_common_substring("xabcdy", "zabcdw") == "abcd" and longest_common_substring("abc", "xyz") == "" and longest_common_substring("", "") == ""
+
+test similar = similarity("", "") == 1.0 and similarity("abc", "abc") == 1.0 and similarity("abc", "xyz") == 0.0 and (similarity("kitten", "sitting") - 0.5714).abs < 0.001
+
+test closests = closest("appel", ["apple", "ape", "maple"]) == some("apple") and closest("x", []) == none and closest("ab", ["xy", "ab"]) == some("ab") and closest("", ["b", "a"]) == some("b")
+
+test naturals = natural_compare("file2", "file10") < 0 and natural_compare("file10", "file2") > 0 and natural_compare("a", "a") == 0 and natural_compare("a01", "a1") != 0 and natural_compare("", "a") < 0 and natural_compare("x9", "x09") != 0 and natural_compare("2", "a") < 0 and natural_compare("v1.10", "v1.9") > 0
+
+test natural_sorts = natural_sort(["img12", "img10", "img2", "img1", "IMG3"]) == ["IMG3", "img1", "img2", "img10", "img12"] and natural_sort([]) == [] and natural_sort(["99999999999999999999999", "100000000000000000000000"]) == ["99999999999999999999999", "100000000000000000000000"]
+
+test wraps = wrap("The quick brown fox", 10) == "The quick\nbrown fox" and wrap("", 5) == "" and wrap("abcdefghij", 4) == "abcdefghij" and wrap("a b\n\nc", 10) == "a b\n\nc" and wrap("  a   b  ", 3) == "a b"
+
+test wrap_withs = wrap_with("abcdefghij", 4, "\n", true) == "abcd\nefgh\nij" and wrap_with("one two", 3, "<br>", false) == "one<br>two" and wrap_with("日本語テキスト", 4, "|", true) == "日本|語テ|キス|ト"
+
+test wrap_line_lists = wrap_lines("aa bb cc", 5, false) == ["aa bb", "cc"] and wrap_lines("", 3, false) == [] and wrap_lines("x", 1, true) == ["x"] and wrap_lines("abc", 1, true) == ["a", "b", "c"]
+
+test unwraps = unwrap("a\nb\n\n\nc\nd") == "a b\n\nc d" and unwrap("") == "" and unwrap("  x  \n y") == "x y"
+
+test indents = indent("a\n\nb", "  ") == "  a\n\n  b" and indent("", "> ") == "" and dedent("    a\n      b\n\n    c") == "a\n  b\n\nc" and dedent("a\n b") == "a\n b" and dedent("") == ""
+
+test surrounds = surround("a", "'") == "'a'" and surround("", "\"") == "\"\"" and surround_if_missing("'a", "'") == "'a'" and surround_if_missing("a", "") == "a" and unsurround("'a'", "'") == "a" and unsurround("'", "'") == "'" and unsurround("''", "'") == "" and unsurround("a", "") == "a" and unsurround("'a", "'") == "'a"
+
+test accents = strip_accents("Crème Brûlée") == "Creme Brulee" and strip_accents("") == "" and strip_accents("ÀÉÎÕÜçñ") == "AEIOUcn" and strip_accents("Łódź Øre đ") == "Lodz Ore d" and strip_accents("Tiếng Việt") == "Tieng Viet" and strip_accents("e" + cs([769]) + "a" + cs([776])) == "ea" and strip_accents("æß日本") == "æß日本"
+
+test asciis = to_ascii("Æsir straße", "?") == "AEsir strasse" and to_ascii("日本", "?") == "??" and to_ascii("日本", "") == "" and to_ascii(cs([8220]) + "hi" + cs([8221, 8230]), "") == "\"hi\"..." and to_ascii("5 €", "") == "5 EUR" and to_ascii("", "x") == ""
+
+test slugs = slugify("Crème Brûlée & Co.") == "creme-brulee-and-co" and slugify("") == "" and slugify("!!!") == "" and slugify("  Hello,   World!  ") == "hello-world" and slugify("日本") == "" and slugify("Ünïcödé 2026") == "unicode-2026" and slug_options().sep == "-"
+
+test slug_withs = slugify_with("Hello World Again", SlugOptions{sep: "_", max_len: 0, lowercase: false}) == "Hello_World_Again" and slugify_with("hello world again", SlugOptions{sep: "-", max_len: 12, lowercase: true}) == "hello-world" and slugify_with("supercalifragilistic", SlugOptions{sep: "-", max_len: 5, lowercase: true}) == "super" and slugify_with("ab cd", SlugOptions{sep: "-", max_len: 3, lowercase: true}) == "ab"
+
+test unique_slugs = unique_slug("post", []) == "post" and unique_slug("post", ["post"]) == "post-2" and unique_slug("post", ["post", "post-2", "post-4"]) == "post-3" and unique_slug("", [""]) == "-2"
+
+test html = escape_html("<a href=\"x\">Tom & Jerry's</a>") == "&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;" and escape_html("") == "" and escape_html("日本") == "日本" and escape_xml("'&'") == "&apos;&amp;&apos;"
+
+test unhtml = unescape_html("&lt;p&gt; &amp;amp; &eacute;&#233;&#xE9;&#XE9;") == "<p> &amp; éééé" and unescape_html("&bogus; &#xZZ; & &;") == "&bogus; &#xZZ; & &;" and unescape_html("&#0; &#xD800; &#1114112;") == "&#0; &#xD800; &#1114112;" and unescape_html("&euro;&nbsp;") == cs([8364, 160]) and unescape_html("") == "" and unescape_html("&amp") == "&amp"
+
+test unxml = unescape_xml("&lt;&apos;&quot;&#65;") == "<'\"A" and unescape_xml("&eacute;") == "&eacute;" and unescape_html(escape_html("<&>\"'")) == "<&>\"'" and unescape_xml(escape_xml("a<b>&'\"")) == "a<b>&'\""
+
+test json_escapes = escape_json("a\"b\\c\nd\te") == "a\\\"b\\\\c\\nd\\te" and escape_json(cs([1, 31, 8232])) == "\\u0001\\u001f\\u2028" and escape_json("日本/") == "日本/" and quote_json("x") == "\"x\"" and quote_json("") == "\"\""
+
+test json_unescapes = unescape_json("a\\\"b\\\\c\\nd\\u00e9\\/") == some("a\"b\\c\ndé/") and unescape_json("\\ud83d\\ude00") == some(cs([128512])) and unescape_json("\\ud83d") == none and unescape_json("\\ude00") == none and unescape_json("\\x") == none and unescape_json("\\u12") == none and unescape_json("\\") == none and unescape_json("") == some("") and unescape_json("\\u12G4") == none
+
+test json_round = ["", "plain", "quote\"back\\slash", "ctl" + cs([0, 7, 27]), "日本 😀", cs([8232, 8233])].all(x => unescape_json(escape_json(x)) == some(x))
+
+test shells = quote_shell("abc") == "abc" and quote_shell("") == "''" and quote_shell("a b") == "'a b'" and quote_shell("it's") == "'it'\"'\"'s'" and quote_shell("$HOME") == "'$HOME'" and quote_shell("a/b.c:d=e@f%g+h,i-j_k") == "a/b.c:d=e@f%g+h,i-j_k" and quote_shell("日本") == "'日本'"
+
+test regexes = quote_regex("a.b*c") == "a\\.b\\*c" and quote_regex("") == "" and ["a.b", "(x)", "[a-z]+", "^$|?*+.\{}", "a\{2}", "日本.*"].all(x => do
+  match regex("^" + quote_regex(x) + "$")
+  | ok(r) => r.is_match(x) and not r.is_match(x + "!")
+  | err(_) => false)
+
+test csvs = quote_csv("plain") == "plain" and quote_csv("a,b") == "\"a,b\"" and quote_csv("say \"hi\"") == "\"say \"\"hi\"\"\"" and quote_csv("a\nb") == "\"a\nb\"" and quote_csv("") == ""
+
+test percents = percent_encode("a b&c/é~") == "a%20b%26c%2F%C3%A9~" and percent_encode("") == "" and percent_decode("a%20b%26c%2F%C3%A9~") == some("a b&c/é~") and percent_decode("a+b") == some("a+b") and percent_decode("%") == none and percent_decode("%2") == none and percent_decode("%zz") == none and percent_decode("%FF") == none and percent_decode("%e6%97%a5") == some("日")
+
+test percent_round = ["", "abc", "日本 語?&=#", "😀", "100%"].all(x => percent_decode(percent_encode(x)) == some(x))
+
+test huge_inputs = do
+  big = "ab".repeat(50000)
+  grapheme_count(big) == 100000 and count_matches(big, "ab") == 50000 and to_snake(big).len == 100000 and display_width(big) == 100000 and reverse_graphemes(big).take(2) == "ba" and levenshtein_within(big, big + "x", 0) == none and slugify(big).len == 100000 and wrap_lines("word ".repeat(20000), 80, false).len == 1250
+
+test huge_escapes = do
+  big = "<a&b>\"".repeat(20000)
+  unescape_html(escape_html(big)) == big and unescape_json(escape_json(big)) == some(big) and percent_decode(percent_encode(big)) == some(big) and lines("x\n".repeat(50000)).len == 50000 and case_words("fooBar ".repeat(20000)).len == 40000 and replace_each(big, [("<", "["), (">", "]")]).len == big.len and indexes_of(big, "&").len == 20000 and split_any_keep(big, "&").len == 20001
+
+// The ASCII letters of a Latin letter with diacritics or a stroke (Latin-1 Supplement, Latin
+// Extended-A and B, Latin Extended Additional), or "" when `c` is not one.
+fn accent_base(c: Int) -> Str
+= match c
+| 192 | 193 | 194 | 195 | 196 | 197 | 256 | 258 | 260 | 461 | 478 | 480 | 506 | 512 | 514 | 550 | 570 | 7680 | 7840 | 7842 | 7844 | 7846 | 7848 | 7850 | 7852 | 7854 | 7856 | 7858 | 7860 | 7862 => "A"
+| 7682 | 7684 | 7686 => "B"
+| 199 | 262 | 264 | 266 | 268 | 571 | 7688 => "C"
+| 270 | 272 | 7690 | 7692 | 7694 | 7696 | 7698 => "D"
+| 200 | 201 | 202 | 203 | 274 | 276 | 278 | 280 | 282 | 516 | 518 | 552 | 582 | 7700 | 7702 | 7704 | 7706 | 7708 | 7864 | 7866 | 7868 | 7870 | 7872 | 7874 | 7876 | 7878 => "E"
+| 7710 => "F"
+| 284 | 286 | 288 | 290 | 484 | 486 | 500 | 7712 => "G"
+| 292 | 294 | 542 | 7714 | 7716 | 7718 | 7720 | 7722 => "H"
+| 204 | 205 | 206 | 207 | 296 | 298 | 300 | 302 | 304 | 407 | 463 | 520 | 522 | 7724 | 7726 | 7880 | 7882 => "I"
+| 308 | 584 => "J"
+| 310 | 488 | 7728 | 7730 | 7732 => "K"
+| 313 | 315 | 317 | 319 | 321 | 7734 | 7736 | 7738 | 7740 => "L"
+| 7742 | 7744 | 7746 => "M"
+| 209 | 323 | 325 | 327 | 504 | 7748 | 7750 | 7752 | 7754 => "N"
+| 210 | 211 | 212 | 213 | 214 | 216 | 332 | 334 | 336 | 416 | 465 | 490 | 492 | 524 | 526 | 554 | 556 | 558 | 560 | 7756 | 7758 | 7760 | 7762 | 7884 | 7886 | 7888 | 7890 | 7892 | 7894 | 7896 | 7898 | 7900 | 7902 | 7904 | 7906 => "O"
+| 7764 | 7766 => "P"
+| 340 | 342 | 344 | 528 | 530 | 588 | 7768 | 7770 | 7772 | 7774 => "R"
+| 346 | 348 | 350 | 352 | 536 | 7776 | 7778 | 7780 | 7782 | 7784 => "S"
+| 354 | 356 | 358 | 538 | 7786 | 7788 | 7790 | 7792 => "T"
+| 217 | 218 | 219 | 220 | 360 | 362 | 364 | 366 | 368 | 370 | 431 | 467 | 469 | 471 | 473 | 475 | 532 | 534 | 7794 | 7796 | 7798 | 7800 | 7802 | 7908 | 7910 | 7912 | 7914 | 7916 | 7918 | 7920 => "U"
+| 7804 | 7806 => "V"
+| 372 | 7808 | 7810 | 7812 | 7814 | 7816 => "W"
+| 7818 | 7820 => "X"
+| 221 | 374 | 376 | 562 | 590 | 7822 | 7922 | 7924 | 7926 | 7928 => "Y"
+| 377 | 379 | 381 | 437 | 7824 | 7826 | 7828 => "Z"
+| 224 | 225 | 226 | 227 | 228 | 229 | 257 | 259 | 261 | 462 | 479 | 481 | 507 | 513 | 515 | 551 | 7681 | 7841 | 7843 | 7845 | 7847 | 7849 | 7851 | 7853 | 7855 | 7857 | 7859 | 7861 | 7863 => "a"
+| 384 | 7683 | 7685 | 7687 => "b"
+| 231 | 263 | 265 | 267 | 269 | 572 | 7689 => "c"
+| 271 | 273 | 7691 | 7693 | 7695 | 7697 | 7699 => "d"
+| 232 | 233 | 234 | 235 | 275 | 277 | 279 | 281 | 283 | 517 | 519 | 553 | 583 | 7701 | 7703 | 7705 | 7707 | 7709 | 7865 | 7867 | 7869 | 7871 | 7873 | 7875 | 7877 | 7879 => "e"
+| 7711 => "f"
+| 285 | 287 | 289 | 291 | 485 | 487 | 501 | 7713 => "g"
+| 293 | 295 | 543 | 7715 | 7717 | 7719 | 7721 | 7723 | 7830 => "h"
+| 236 | 237 | 238 | 239 | 297 | 299 | 301 | 303 | 305 | 464 | 521 | 523 | 7725 | 7727 | 7881 | 7883 => "i"
+| 309 | 496 | 585 => "j"
+| 311 | 489 | 7729 | 7731 | 7733 => "k"
+| 314 | 316 | 318 | 320 | 322 | 7735 | 7737 | 7739 | 7741 => "l"
+| 7743 | 7745 | 7747 => "m"
+| 241 | 324 | 326 | 328 | 505 | 7749 | 7751 | 7753 | 7755 => "n"
+| 242 | 243 | 244 | 245 | 246 | 248 | 333 | 335 | 337 | 417 | 466 | 491 | 493 | 525 | 527 | 555 | 557 | 559 | 561 | 7757 | 7759 | 7761 | 7763 | 7885 | 7887 | 7889 | 7891 | 7893 | 7895 | 7897 | 7899 | 7901 | 7903 | 7905 | 7907 => "o"
+| 7765 | 7767 => "p"
+| 341 | 343 | 345 | 529 | 531 | 589 | 7769 | 7771 | 7773 | 7775 => "r"
+| 347 | 349 | 351 | 353 | 537 | 7777 | 7779 | 7781 | 7783 | 7785 => "s"
+| 355 | 357 | 359 | 539 | 7787 | 7789 | 7791 | 7793 | 7831 => "t"
+| 249 | 250 | 251 | 252 | 361 | 363 | 365 | 367 | 369 | 371 | 432 | 468 | 470 | 472 | 474 | 476 | 533 | 535 | 7795 | 7797 | 7799 | 7801 | 7803 | 7909 | 7911 | 7913 | 7915 | 7917 | 7919 | 7921 => "u"
+| 7805 | 7807 => "v"
+| 373 | 7809 | 7811 | 7813 | 7815 | 7817 | 7832 => "w"
+| 7565 | 7819 | 7821 => "x"
+| 253 | 255 | 375 | 563 | 591 | 7823 | 7833 | 7923 | 7925 | 7927 | 7929 => "y"
+| 378 | 380 | 382 | 438 | 7825 | 7827 | 7829 => "z"
+| _ => ""
+
+// The ASCII spelling of a ligature, letter or punctuation mark that has no diacritic to strip, or
+// "" when `c` has none.
+fn translit_extra(c: Int) -> Str
+= match c
+| 160 | 8194 | 8195 | 8199 | 8201 | 8239 => " "
+| 161 => "!"
+| 8800 => "!="
+| 171 | 187 | 8220 | 8221 | 8222 | 8223 | 8243 => "\""
+| 8216 | 8217 | 8218 | 8219 | 8242 | 8249 | 8250 => "'"
+| 329 => "'n"
+| 169 => "(c)"
+| 174 => "(r)"
+| 8482 => "(tm)"
+| 8226 => "*"
+| 8208 | 8209 | 8210 | 8211 | 8212 | 8213 | 8722 => "-"
+| 8594 => "->"
+| 183 => "."
+| 8230 => "..."
+| 247 => "/"
+| 185 => "1"
+| 189 => "1/2"
+| 188 => "1/4"
+| 178 => "2"
+| 179 => "3"
+| 190 => "3/4"
+| 8592 => "<-"
+| 8804 => "<="
+| 8805 => ">="
+| 191 => "?"
+| 198 => "AE"
+| 208 => "D"
+| 8364 => "EUR"
+| 163 => "GBP"
+| 306 => "IJ"
+| 8377 => "INR"
+| 165 => "JPY"
+| 330 => "N"
+| 338 => "OE"
+| 182 => "P"
+| 167 => "S"
+| 7838 => "SS"
+| 222 => "TH"
+| 230 => "ae"
+| 162 => "c"
+| 240 => "d"
+| 176 => "deg"
+| 307 => "ij"
+| 312 => "k"
+| 331 => "n"
+| 339 => "oe"
+| 383 => "s"
+| 223 => "ss"
+| 254 => "th"
+| 181 => "u"
+| 215 => "x"
+| _ => ""
+
+// The code point of an HTML 4 named character reference (plus `apos`), or -1.
+fn entity_code(name: Str) -> Int
+= match name
+| "AElig" => 198
+| "Aacute" => 193
+| "Acirc" => 194
+| "Agrave" => 192
+| "Alpha" => 913
+| "Aring" => 197
+| "Atilde" => 195
+| "Auml" => 196
+| "Beta" => 914
+| "Ccedil" => 199
+| "Chi" => 935
+| "Dagger" => 8225
+| "Delta" => 916
+| "ETH" => 208
+| "Eacute" => 201
+| "Ecirc" => 202
+| "Egrave" => 200
+| "Epsilon" => 917
+| "Eta" => 919
+| "Euml" => 203
+| "Gamma" => 915
+| "Iacute" => 205
+| "Icirc" => 206
+| "Igrave" => 204
+| "Iota" => 921
+| "Iuml" => 207
+| "Kappa" => 922
+| "Lambda" => 923
+| "Mu" => 924
+| "Ntilde" => 209
+| "Nu" => 925
+| "OElig" => 338
+| "Oacute" => 211
+| "Ocirc" => 212
+| "Ograve" => 210
+| "Omega" => 937
+| "Omicron" => 927
+| "Oslash" => 216
+| "Otilde" => 213
+| "Ouml" => 214
+| "Phi" => 934
+| "Pi" => 928
+| "Prime" => 8243
+| "Psi" => 936
+| "Rho" => 929
+| "Scaron" => 352
+| "Sigma" => 931
+| "THORN" => 222
+| "Tau" => 932
+| "Theta" => 920
+| "Uacute" => 218
+| "Ucirc" => 219
+| "Ugrave" => 217
+| "Upsilon" => 933
+| "Uuml" => 220
+| "Xi" => 926
+| "Yacute" => 221
+| "Yuml" => 376
+| "Zeta" => 918
+| "aacute" => 225
+| "acirc" => 226
+| "acute" => 180
+| "aelig" => 230
+| "agrave" => 224
+| "alefsym" => 8501
+| "alpha" => 945
+| "amp" => 38
+| "and" => 8743
+| "ang" => 8736
+| "apos" => 39
+| "aring" => 229
+| "asymp" => 8776
+| "atilde" => 227
+| "auml" => 228
+| "bdquo" => 8222
+| "beta" => 946
+| "brvbar" => 166
+| "bull" => 8226
+| "cap" => 8745
+| "ccedil" => 231
+| "cedil" => 184
+| "cent" => 162
+| "chi" => 967
+| "circ" => 710
+| "clubs" => 9827
+| "cong" => 8773
+| "copy" => 169
+| "crarr" => 8629
+| "cup" => 8746
+| "curren" => 164
+| "dArr" => 8659
+| "dagger" => 8224
+| "darr" => 8595
+| "deg" => 176
+| "delta" => 948
+| "diams" => 9830
+| "divide" => 247
+| "eacute" => 233
+| "ecirc" => 234
+| "egrave" => 232
+| "empty" => 8709
+| "emsp" => 8195
+| "ensp" => 8194
+| "epsilon" => 949
+| "equiv" => 8801
+| "eta" => 951
+| "eth" => 240
+| "euml" => 235
+| "euro" => 8364
+| "exist" => 8707
+| "fnof" => 402
+| "forall" => 8704
+| "frac12" => 189
+| "frac14" => 188
+| "frac34" => 190
+| "frasl" => 8260
+| "gamma" => 947
+| "ge" => 8805
+| "gt" => 62
+| "hArr" => 8660
+| "harr" => 8596
+| "hearts" => 9829
+| "hellip" => 8230
+| "iacute" => 237
+| "icirc" => 238
+| "iexcl" => 161
+| "igrave" => 236
+| "image" => 8465
+| "infin" => 8734
+| "int" => 8747
+| "iota" => 953
+| "iquest" => 191
+| "isin" => 8712
+| "iuml" => 239
+| "kappa" => 954
+| "lArr" => 8656
+| "lambda" => 955
+| "lang" => 9001
+| "laquo" => 171
+| "larr" => 8592
+| "lceil" => 8968
+| "ldquo" => 8220
+| "le" => 8804
+| "lfloor" => 8970
+| "lowast" => 8727
+| "loz" => 9674
+| "lrm" => 8206
+| "lsaquo" => 8249
+| "lsquo" => 8216
+| "lt" => 60
+| "macr" => 175
+| "mdash" => 8212
+| "micro" => 181
+| "middot" => 183
+| "minus" => 8722
+| "mu" => 956
+| "nabla" => 8711
+| "nbsp" => 160
+| "ndash" => 8211
+| "ne" => 8800
+| "ni" => 8715
+| "not" => 172
+| "notin" => 8713
+| "nsub" => 8836
+| "ntilde" => 241
+| "nu" => 957
+| "oacute" => 243
+| "ocirc" => 244
+| "oelig" => 339
+| "ograve" => 242
+| "oline" => 8254
+| "omega" => 969
+| "omicron" => 959
+| "oplus" => 8853
+| "or" => 8744
+| "ordf" => 170
+| "ordm" => 186
+| "oslash" => 248
+| "otilde" => 245
+| "otimes" => 8855
+| "ouml" => 246
+| "para" => 182
+| "part" => 8706
+| "permil" => 8240
+| "perp" => 8869
+| "phi" => 966
+| "pi" => 960
+| "piv" => 982
+| "plusmn" => 177
+| "pound" => 163
+| "prime" => 8242
+| "prod" => 8719
+| "prop" => 8733
+| "psi" => 968
+| "quot" => 34
+| "rArr" => 8658
+| "radic" => 8730
+| "rang" => 9002
+| "raquo" => 187
+| "rarr" => 8594
+| "rceil" => 8969
+| "rdquo" => 8221
+| "real" => 8476
+| "reg" => 174
+| "rfloor" => 8971
+| "rho" => 961
+| "rlm" => 8207
+| "rsaquo" => 8250
+| "rsquo" => 8217
+| "sbquo" => 8218
+| "scaron" => 353
+| "sdot" => 8901
+| "sect" => 167
+| "shy" => 173
+| "sigma" => 963
+| "sigmaf" => 962
+| "sim" => 8764
+| "spades" => 9824
+| "sub" => 8834
+| "sube" => 8838
+| "sum" => 8721
+| "sup" => 8835
+| "sup1" => 185
+| "sup2" => 178
+| "sup3" => 179
+| "supe" => 8839
+| "szlig" => 223
+| "tau" => 964
+| "there4" => 8756
+| "theta" => 952
+| "thetasym" => 977
+| "thinsp" => 8201
+| "thorn" => 254
+| "tilde" => 732
+| "times" => 215
+| "trade" => 8482
+| "uArr" => 8657
+| "uacute" => 250
+| "uarr" => 8593
+| "ucirc" => 251
+| "ugrave" => 249
+| "uml" => 168
+| "upsih" => 978
+| "upsilon" => 965
+| "uuml" => 252
+| "weierp" => 8472
+| "xi" => 958
+| "yacute" => 253
+| "yen" => 165
+| "yuml" => 255
+| "zeta" => 950
+| "zwj" => 8205
+| "zwnj" => 8204
+| _ => -1
